@@ -107,9 +107,10 @@ with c1:
         ["Indian Stocks (NSE)", "US Stocks (NASDAQ/NYSE)", "Forex (Currencies)", "Crypto"]
     )
 with c2:
-    auto_refresh = st.checkbox("Auto Refresh (60s)", value=False)
+    auto_refresh = st.checkbox("Auto Refresh (5 Min)", value=True)
     if auto_refresh:
-        st_autorefresh(interval=60000, key="datarefresh")
+        # 5 minutes = 300,000 milliseconds
+        st_autorefresh(interval=300000, key="datarefresh")
 
 # Position sizing risk input
 col_risk, col_flt = st.columns([1, 1])
@@ -202,7 +203,7 @@ def fetch_pro_analysis(ticker):
         stop_loss = round(ltp - curr_atr, dec)
         target = round(ltp + (2 * curr_atr), dec)
 
-        # Dynamic position sizing
+        # Dynamic position sizing based on ATR risk
         risk_per_share = curr_atr if curr_atr > 0 else (ltp * 0.015)
         shares_qty = int(max_risk / risk_per_share) if risk_per_share > 0 else 1
 
