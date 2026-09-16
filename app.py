@@ -3,10 +3,38 @@ import yfinance as yf
 import pandas as pd
 import ta
 
-st.set_page_config(page_title="Global Momentum Scanner", layout="wide")
+st.set_page_config(page_title="Global Momentum Scanner", layout="centered")
 
-st.title("⚡ Global Momentum Scanner & SL/TP Engine")
-st.caption("Live Breakouts, Volume Surges & 1:2 Risk-Reward Levels")
+# Custom CSS for Mobile friendly styling
+st.markdown("""
+<style>
+    .metric-box {
+        background-color: #f8f9fa;
+        border-radius: 8px;
+        padding: 10px;
+        margin-bottom: 8px;
+        border-left: 4px solid #1E88E5;
+    }
+    .badge-breakout {
+        background-color: #ff4b4b;
+        color: white;
+        padding: 3px 8px;
+        border-radius: 4px;
+        font-weight: bold;
+        font-size: 0.85rem;
+    }
+    .badge-watch {
+        background-color: #6c757d;
+        color: white;
+        padding: 3px 8px;
+        border-radius: 4px;
+        font-size: 0.85rem;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+st.title("⚡ Market Scanner")
+st.caption("Live Breakouts & 1:2 Risk-Reward Engine")
 
 market_choice = st.selectbox(
     "Market Chuniye:",
@@ -68,7 +96,6 @@ def fetch_analysis(ticker):
 
         recent_high = float(high.iloc[-21:-1].max())
 
-        # Signals
         is_breakout = ltp > recent_high
         is_volume_spike = curr_vol > (1.5 * avg_vol) if avg_vol > 0 else False
 
@@ -80,51 +107,78 @@ def fetch_analysis(ticker):
         elif is_volume_spike:
             signal = "⚡ VOLUME SHOCKER"
 
-        # Risk-Reward Calculations (1:2 ATR based)
-        buy_level = round(ltp, 4 if "=X" in ticker else 2)
-        stop_loss = round(ltp - curr_atr, 4 if "=X" in ticker else 2)
-        risk = round(curr_atr, 4 if "=X" in ticker else 2)
-        target = round(ltp + (2 * curr_atr), 4 if "=X" in ticker else 2)
+        dec = 4 if "=X" in ticker else 2
+        buy_level = round(ltp, dec)
+        stop_loss = round(ltp - curr_atr, dec)
+        risk = round(curr_atr, dec)
+        target = round(ltp + (2 * curr_atr), dec)
 
         clean_symbol = ticker.replace(".NS", "").replace("=X", "")
 
         return {
             "Asset": clean_symbol,
-            f"LTP ({currency})": buy_level,
+            "LTP": buy_level,
             "Change %": round(change_pct, 2),
             "Signal": signal,
             "RSI": round(curr_rsi, 1),
-            f"Buy Level ({currency})": buy_level,
-            f"Stop Loss ({currency})": stop_loss,
-            f"Target (1:2) ({currency})": target,
-            f"Risk ({currency})": risk
+            "Buy Level": buy_level,
+            "Stop Loss": stop_loss,
+            "Target (1:2)": target,
+            "Risk": risk,
+            "Currency": currency
         }
     except Exception:
         return None
 
-if st.button("🔄 Refresh Data"):
-    st.rerun()
+col_a, col_b = st.columns([1, 1])
+with col_a:
+    if st.button("🔄 Refresh Rates", use_container_width=True):
+        st.rerun()
+with col_b:
+    filter_choice = st.radio("Filter:", ["Sirf Breakouts 🔥", "Sabhi Assets 📋"], horizontal=True)
 
-with st.spinner(f"{market_choice} scan ho raha hai... Kripya 5 second rukhein..."):
+with st.spinner("Market scan ho raha hai..."):
     results = []
     for sym in WATCHLIST:
-        data = fetch_analysis(sym)
-        if data:
-            results.append(data)
+        d = fetch_analysis(sym)
+        if d:
+            results.append(d)
 
 if results:
     df_res = pd.DataFrame(results)
+    
+    if "Sirf Breakouts" in filter_choice:
+        display_data = [r for r in results if r["Signal"] != "WATCH"]
+        if not display_data:
+            st.info("Abhi kisi asset mein high surge ya breakout nahi hai. Sabhi dekhne ke liye 'Sabhi Assets' chunein.")
+    else:
+        display_data = results
 
-    tab1, tab2 = st.tabs(["🔥 Buzzing & Breakouts", "📋 Full Watchlist"])
+    # Mobile Cards Layout (Upar se Neeche Rows)
+    for item in display_data:
+        cur = item["Currency"]
+        with st.container(border=True):
+            # Top row: Name, Signal Badge, Change %
+            c1, c2 = st.columns([2, 1])
+            with c1:
+                st.markdown(f"### *{item['Asset']}*")
+                if item['Signal'] != "WATCH":
+                    st.markdown(f"<span class='badge-breakout'>{item['Signal']}</span>", unsafe_allow_html=True)
+                else:
+                    st.markdown(f"<span class='badge-watch'>{item['Signal']}</span>", unsafe_allow_html=True)
+            with c2:
+                chg = item['Change %']
+                color = "green" if chg >= 0 else "red"
+                sign = "+" if chg >= 0 else ""
+                st.markdown(f"<h3 style='text-align:right; color:{color}; margin:0;'>{sign}{chg}%</h3>", unsafe_allow_html=True)
+                st.markdown(f"<p style='text-align:right; margin:0; color:gray;'>RSI: <b>{item['RSI']}</b></p>", unsafe_allow_html=True)
 
-    with tab1:
-        buzzing = df_res[df_res["Signal"] != "WATCH"]
-        if not buzzing.empty:
-            st.dataframe(buzzing, use_container_width=True)
-        else:
-            st.info("Abhi kisi asset mein high volume surge ya breakout nahi hua hai.")
+            st.divider()
 
-    with tab2:
-        st.dataframe(df_res, use_container_width=True)
+            # Mobile Row: Buy, Stop Loss, Target in clean horizontal columns inside card
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Buy Level", f"{cur}{item['Buy Level']}")
+            m2.metric("Stop Loss", f"{cur}{item['Stop Loss']}")
+            m3.metric("Target (1:2)", f"{cur}{item['Target (1:2)']}")
 else:
-    st.warning("Data fetch karne mein dikkat aayi. Kripya thodi der baad Refresh karein.")
+    st.warning("Data load nahi hua. Kripya 'Refresh' dabayein.")
