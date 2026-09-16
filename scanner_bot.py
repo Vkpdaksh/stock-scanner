@@ -38,10 +38,11 @@ def check_stock(ticker):
 
         close = df['Close']
         high = df['High']
+        low = df['Low']
         volume = df['Volume']
 
         rsi = ta.momentum.rsi(close, window=14)
-        atr = ta.volatility.average_true_range(high, df['Low'], close, window=14)
+        atr = ta.volatility.average_true_range(high, low, close, window=14)
         vol_sma = volume.rolling(window=20).mean()
         ema_50 = ta.trend.ema_indicator(close, window=50)
 
@@ -77,4 +78,4 @@ def check_stock(ticker):
 
 if _name_ == "_main_":
     for sym in WATCHLIST:
-        check_stock(sym)
+        check_stock(sym
