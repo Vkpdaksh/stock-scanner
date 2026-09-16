@@ -1,0 +1,27 @@
+name: Market Background Scanner
+
+on:
+  schedule:
+    # Monday to Friday market hours (IST 9:15 AM to 3:30 PM = UTC 3:45 to 10:00)
+    - cron: '*/15 3-10 * * 1-5'
+  workflow_dispatch: # Manual test button
+
+jobs:
+  run-scanner:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Dependencies
+        run: |
+          pip install yfinance pandas ta
+
+      - name: Run Market Scan
+        run: |
+          python scanner_bot.py
