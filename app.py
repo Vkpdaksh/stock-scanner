@@ -3,110 +3,128 @@ import yfinance as yf
 import pandas as pd
 import ta
 
-st.set_page_config(page_title="Global Market Scanner", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="Global Momentum Scanner", layout="wide")
 
 st.title("⚡ Global Momentum Scanner & SL/TP Engine")
 st.caption("Live Breakouts, Volume Surges & 1:2 Risk-Reward Levels")
 
-# Market Selection Dropdown
 market_choice = st.selectbox(
-    "Market Chunein:",
-    ["Indian Stocks (NSE)", "US Stocks (NASDAQ/NYSE)", "Crypto (USD)"]
+    "Market Chuniye:",
+    ["Indian Stocks (NSE)", "US Stocks (NASDAQ/NYSE)", "Forex (Currencies)", "Crypto"]
 )
 
-# Market ke hisab se watchlists aur currency
 if market_choice == "Indian Stocks (NSE)":
+    currency = "₹"
     WATCHLIST = [
         "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "ICICIBANK.NS", "INFY.NS",
         "BHARTIARTL.NS", "ITC.NS", "LT.NS", "TATAMOTORS.NS", "SBIN.NS",
         "ADANIENT.NS", "SUNPHARMA.NS", "BAJFINANCE.NS", "TITAN.NS", "TATASTEEL.NS"
     ]
-    currency = "₹"
 elif market_choice == "US Stocks (NASDAQ/NYSE)":
+    currency = "$"
     WATCHLIST = [
         "AAPL", "NVDA", "TSLA", "MSFT", "AMZN",
         "META", "GOOGL", "AMD", "NFLX", "INTC"
     ]
-    currency = "$"
+elif market_choice == "Forex (Currencies)":
+    currency = "₹/$"
+    WATCHLIST = [
+        "USDINR=X", "EURUSD=X", "GBPUSD=X", "USDJPY=X", 
+        "AUDUSD=X", "USDCAD=X", "USDCHF=X", "EURINR=X", 
+        "GBPINR=X", "JPYINR=X"
+    ]
 else:
+    currency = "$"
     WATCHLIST = [
         "BTC-USD", "ETH-USD", "SOL-USD", "BNB-USD", "XRP-USD", "DOGE-USD"
     ]
-    currency = "$"
+
+def fetch_analysis(ticker):
+    try:
+        df = yf.download(ticker, period="3mo", interval="1d", progress=False)
+        if df.empty or len(df) < 20:
+            return None
+
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = [col[0] for col in df.columns]
+
+        close = df['Close']
+        high = df['High']
+        low = df['Low']
+        volume = df['Volume']
+
+        rsi_series = ta.momentum.rsi(close, window=14)
+        atr_series = ta.volatility.average_true_range(high, low, close, window=14)
+        vol_sma_series = volume.rolling(window=20).mean()
+
+        ltp = float(close.iloc[-1])
+        prev_close = float(close.iloc[-2])
+        change_pct = ((ltp - prev_close) / prev_close) * 100
+
+        curr_rsi = float(rsi_series.iloc[-1]) if not rsi_series.empty else 50.0
+        curr_atr = float(atr_series.iloc[-1]) if not atr_series.empty else (ltp * 0.015)
+        curr_vol = float(volume.iloc[-1]) if not volume.empty else 0
+        avg_vol = float(vol_sma_series.iloc[-1]) if not vol_sma_series.empty else 1
+
+        recent_high = float(high.iloc[-21:-1].max())
+
+        # Signals
+        is_breakout = ltp > recent_high
+        is_volume_spike = curr_vol > (1.5 * avg_vol) if avg_vol > 0 else False
+
+        signal = "WATCH"
+        if is_breakout and is_volume_spike:
+            signal = "🚀 STRONG BREAKOUT"
+        elif is_breakout:
+            signal = "🔥 PRICE BREAKOUT"
+        elif is_volume_spike:
+            signal = "⚡ VOLUME SHOCKER"
+
+        # Risk-Reward Calculations (1:2 ATR based)
+        buy_level = round(ltp, 4 if "=X" in ticker else 2)
+        stop_loss = round(ltp - curr_atr, 4 if "=X" in ticker else 2)
+        risk = round(curr_atr, 4 if "=X" in ticker else 2)
+        target = round(ltp + (2 * curr_atr), 4 if "=X" in ticker else 2)
+
+        clean_symbol = ticker.replace(".NS", "").replace("=X", "")
+
+        return {
+            "Asset": clean_symbol,
+            f"LTP ({currency})": buy_level,
+            "Change %": round(change_pct, 2),
+            "Signal": signal,
+            "RSI": round(curr_rsi, 1),
+            f"Buy Level ({currency})": buy_level,
+            f"Stop Loss ({currency})": stop_loss,
+            f"Target (1:2) ({currency})": target,
+            f"Risk ({currency})": risk
+        }
+    except Exception:
+        return None
 
 if st.button("🔄 Refresh Data"):
     st.rerun()
 
-results = []
+with st.spinner(f"{market_choice} scan ho raha hai... Kripya 5 second rukhein..."):
+    results = []
+    for sym in WATCHLIST:
+        data = fetch_analysis(sym)
+        if data:
+            results.append(data)
 
-with st.spinner(f"{market_choice} scan ho raha hai... Kripya 5-10 second wait karein."):
-    for ticker in WATCHLIST:
-        try:
-            df = yf.download(ticker, period="6mo", interval="1d", progress=False)
-            if len(df) < 30:
-                continue
+if results:
+    df_res = pd.DataFrame(results)
 
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = df.columns.get_level_values(0)
+    tab1, tab2 = st.tabs(["🔥 Buzzing & Breakouts", "📋 Full Watchlist"])
 
-            ltp = float(df['Close'].iloc[-1])
-            prev_close = float(df['Close'].iloc[-2])
-            high_20d = float(df['High'].iloc[-21:-1].max())
-            high_52w = float(df['High'].max())
-            curr_vol = float(df['Volume'].iloc[-1])
-            avg_vol = float(df['Volume'].iloc[-21:-1].mean())
+    with tab1:
+        buzzing = df_res[df_res["Signal"] != "WATCH"]
+        if not buzzing.empty:
+            st.dataframe(buzzing, use_container_width=True)
+        else:
+            st.info("Abhi kisi asset mein high volume surge ya breakout nahi hua hai.")
 
-            df['RSI'] = ta.momentum.RSIIndicator(df['Close'], window=14).rsi()
-            df['ATR'] = ta.volatility.AverageTrueRange(df['High'], df['Low'], df['Close'], window=14).average_true_range()
-
-            rsi = float(df['RSI'].iloc[-1])
-            atr = float(df['ATR'].iloc[-1])
-
-            vol_shock = curr_vol >= (1.5 * avg_vol)
-            breakout_20d = ltp >= high_20d
-            near_52w = ltp >= (0.98 * high_52w)
-
-            signal = "WATCH"
-            if breakout_20d and vol_shock:
-                signal = "🔥 STRONG BREAKOUT"
-            elif near_52w and rsi > 60:
-                signal = "🚀 52W MOMENTUM"
-            elif vol_shock:
-                signal = "⚡ VOLUME SHOCKER"
-
-            stop_loss = round(ltp - (1.5 * atr), 2)
-            risk = round(ltp - stop_loss, 2)
-            target = round(ltp + (2.0 * risk), 2)
-
-            clean_name = ticker.replace(".NS", "").replace("-USD", "")
-
-            results.append({
-                "Asset": clean_name,
-                f"LTP ({currency})": round(ltp, 2),
-                "Change %": round(((ltp - prev_close) / prev_close) * 100, 2),
-                "Signal": signal,
-                "RSI": round(rsi, 1),
-                f"Buy Level ({currency})": round(ltp, 2),
-                f"Stop Loss ({currency})": stop_loss,
-                f"Target (1:2) ({currency})": target,
-                f"Risk ({currency})": risk
-            })
-        except Exception:
-            continue
-
-df_result = pd.DataFrame(results)
-
-tab1, tab2 = st.tabs(["🎯 Buzzing & Breakouts", "📊 Full Watchlist"])
-
-with tab1:
-    buzzing = df_result[df_result["Signal"] != "WATCH"] if not df_result.empty else pd.DataFrame()
-    if not buzzing.empty:
-        st.dataframe(buzzing, use_container_width=True)
-    else:
-        st.info("Filhal koi asset breakout criteria match nahi kar raha hai.")
-
-with tab2:
-    if not df_result.empty:
-        st.dataframe(df_result, use_container_width=True)
-    else:
-        st.warning("Data fetch karne mein dikkat aayi. Kripya thodi der baad Refresh karein.")
+    with tab2:
+        st.dataframe(df_res, use_container_width=True)
+else:
+    st.warning("Data fetch karne mein dikkat aayi. Kripya thodi der baad Refresh karein.")
