@@ -2,9 +2,8 @@ name: Market Background Scanner
 
 on:
   schedule:
-    # Monday to Friday market hours (IST 9:15 AM to 3:30 PM = UTC 3:45 to 10:00)
     - cron: '*/15 3-10 * * 1-5'
-  workflow_dispatch: # Manual test button
+  workflow_dispatch:
 
 jobs:
   run-scanner:
