@@ -24,18 +24,67 @@ def send_telegram_alert(message):
     except Exception:
         pass
 
+# CSS to strictly lock table width inside mobile screen
 st.markdown("""
 <style>
     .block-container {
         padding-top: 1rem;
         padding-bottom: 1rem;
-        padding-left: 0.5rem;
-        padding-right: 0.5rem;
+        padding-left: 0.3rem;
+        padding-right: 0.3rem;
+    }
+    .custom-table {
+        width: 100% !important;
+        border-collapse: collapse;
+        font-size: 11px;
+        margin-top: 10px;
+    }
+    .custom-table th {
+        background-color: #f1f3f5;
+        color: #111;
+        font-weight: bold;
+        text-align: center;
+        padding: 6px 2px;
+        border: 1px solid #dee2e6;
+    }
+    .custom-table td {
+        text-align: center;
+        padding: 6px 2px;
+        border: 1px solid #dee2e6;
+        vertical-align: middle;
+    }
+    .badge-strong {
+        background-color: #28a745;
+        color: white;
+        padding: 2px 4px;
+        border-radius: 3px;
+        font-weight: bold;
+        font-size: 10px;
+    }
+    .badge-breakout {
+        background-color: #ff9800;
+        color: white;
+        padding: 2px 4px;
+        border-radius: 3px;
+        font-weight: bold;
+        font-size: 10px;
+    }
+    .badge-vol {
+        background-color: #007bff;
+        color: white;
+        padding: 2px 4px;
+        border-radius: 3px;
+        font-weight: bold;
+        font-size: 10px;
+    }
+    .badge-watch {
+        color: #6c757d;
+        font-size: 10px;
     }
 </style>
 """, unsafe_allow_html=True)
 
-st.subheader("⚡ Live Market Scanner & Alert Engine")
+st.subheader("⚡ Live Market Scanner")
 
 market_choice = st.selectbox(
     "Market Chuniye:",
@@ -114,16 +163,11 @@ def fetch_analysis(ticker):
 
         return {
             "Asset": clean_symbol,
-            f"Buy ({currency})" if currency else "Buy": buy_level,
-            f"SL ({currency})" if currency else "SL": stop_loss,
-            f"TP ({currency})" if currency else "TP": target,
+            "Buy": buy_level,
+            "SL": stop_loss,
+            "TP": target,
             "RSI": round(curr_rsi, 1),
-            "Signal": signal,
-            "_raw_signal": signal,
-            "_buy": buy_level,
-            "_sl": stop_loss,
-            "_tp": target,
-            "_rsi": round(curr_rsi, 1)
+            "Signal": signal
         }
     except Exception:
         return None
@@ -133,51 +177,61 @@ with col1:
     if st.button("🔄 Refresh Data", use_container_width=True):
         st.rerun()
 with col2:
-    filter_active = st.checkbox("Sirf Alerts/Breakouts", value=False)
+    filter_active = st.checkbox("Sirf Breakouts 🔥", value=False)
 
-# Optional Telegram Test Button
-if st.button("📲 Test Telegram Alert"):
-    send_telegram_alert("✅ Telegram Alert Test: Scanner connected successfully!")
-    st.success("Test message Telegram par bhej diya gaya hai!")
-
-with st.spinner("Market scan ho raha hai..."):
+with st.spinner("Scanning..."):
     results = []
     for sym in WATCHLIST:
         data = fetch_analysis(sym)
         if data:
             results.append(data)
             # Automatic alert for strong signals
-            if data["_raw_signal"] in ["🚀 STRONG", "🔥 BREAKOUT", "⚡ VOL SURGE"]:
+            if data["Signal"] in ["🚀 STRONG", "🔥 BREAKOUT", "⚡ VOL SURGE"]:
                 alert_text = (
                     f"🚨 Market Alert Triggered!\n"
                     f"📈 Asset: {data['Asset']}\n"
-                    f"🎯 Signal: {data['_raw_signal']}\n"
-                    f"💵 Buy: {currency}{data['_buy']}\n"
-                    f"🛑 SL: {currency}{data['_sl']}\n"
-                    f"🏆 TP: {currency}{data['_tp']}\n"
-                    f"📊 RSI: {data['_rsi']}"
+                    f"🎯 Signal: {data['Signal']}\n"
+                    f"💵 Buy: {currency}{data['Buy']}\n"
+                    f"🛑 SL: {currency}{data['SL']}\n"
+                    f"🏆 TP: {currency}{data['TP']}\n"
+                    f"📊 RSI: {data['RSI']}"
                 )
                 send_telegram_alert(alert_text)
 
 if results:
-    # Clean display columns
-    clean_display = []
-    for r in results:
-        clean_display.append({
-            "Asset": r["Asset"],
-            f"Buy ({currency})" if currency else "Buy": r[f"Buy ({currency})" if currency else "Buy"],
-            f"SL ({currency})" if currency else "SL": r[f"SL ({currency})" if currency else "SL"],
-            f"TP ({currency})" if currency else "TP": r[f"TP ({currency})" if currency else "TP"],
-            "RSI": r["RSI"],
-            "Signal": r["Signal"]
-        })
-    df_res = pd.DataFrame(clean_display)
     if filter_active:
-        df_res = df_res[df_res["Signal"] != "WATCH"]
-
-    if not df_res.empty:
-        st.dataframe(df_res, use_container_width=True, hide_index=True)
+        display_list = [r for r in results if r["Signal"] != "WATCH"]
     else:
-        st.info("Abhi kisi asset me naya breakout trigger nahi hua hai.")
+        display_list = results
+
+    if display_list:
+        # Build strict mobile HTML table matching your exact sketch
+        html = '<table class="custom-table">'
+        html += f'<thead><tr><th>Asset</th><th>Buy ({currency})</th><th>SL</th><th>TP</th><th>RSI</th><th>Signal</th></tr></thead><tbody>'
+        
+        for row in display_list:
+            sig = row["Signal"]
+            if sig == "🚀 STRONG":
+                sig_html = f'<span class="badge-strong">{sig}</span>'
+            elif sig == "🔥 BREAKOUT":
+                sig_html = f'<span class="badge-breakout">{sig}</span>'
+            elif sig == "⚡ VOL SURGE":
+                sig_html = f'<span class="badge-vol">{sig}</span>'
+            else:
+                sig_html = f'<span class="badge-watch">{sig}</span>'
+
+            html += f'<tr>'
+            html += f'<td><b>{row["Asset"]}</b></td>'
+            html += f'<td>{row["Buy"]}</td>'
+            html += f'<td style="color:#d9534f;">{row["SL"]}</td>'
+            html += f'<td style="color:#28a745;">{row["TP"]}</td>'
+            html += f'<td>{row["RSI"]}</td>'
+            html += f'<td>{sig_html}</td>'
+            html += f'</tr>'
+
+        html += '</tbody></table>'
+        st.markdown(html, unsafe_allow_html=True)
+    else:
+        st.info("Abhi koi breakout signal nahi hai.")
 else:
     st.warning("Data fetch nahi ho saka. Kripya Refresh karein.")
