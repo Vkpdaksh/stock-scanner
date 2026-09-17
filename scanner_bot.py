@@ -78,4 +78,4 @@ def check_stock(ticker):
 
 if __name__ == "__main__":
     for sym in WATCHLIST:
-        check_stock(sym
+        check_stock(sym)
