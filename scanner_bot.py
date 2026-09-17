@@ -7,14 +7,13 @@ import pandas as pd
 import ta
 import yfinance as yf
 
-# Telegram Bot Credentials
+# Aapka Original Personal Telegram Chat Credentials
 TELEGRAM_BOT_TOKEN = "8732059380:AAGF7qoak6yPiI5ToYGPLSVQQM4GChhKriI"
 TELEGRAM_CHAT_ID = "1527960238"
 
 CACHE_FILE = "sent_alerts.json"
 ACTIVE_TRADES_FILE = "active_trades.json"
 
-# All 4 Major Markets Included
 WATCHLIST = {
     # 1. Indian Equities (NSE)
     "RELIANCE.NS": ("^NSEI", "Indian Energy/Oil"),
@@ -26,11 +25,11 @@ WATCHLIST = {
     "TATAMOTORS.NS": ("^CNXAUTO", "Indian Auto"),
     "TITAN.NS": ("^CNXCONSUM", "Indian Consumer Goods"),
     
-    # 2. US Stocks (Tech Titans)
+    # 2. US Stocks
     "NVDA": ("^IXIC", "US Tech (NASDAQ)"),
     "TSLA": ("^IXIC", "US Tech (NASDAQ)"),
     
-    # 3. 24x7 Crypto Assets
+    # 3. 24x7 Crypto
     "BTC-USD": ("BTC-USD", "Crypto 24x7"),
     "ETH-USD": ("BTC-USD", "Crypto 24x7"),
     
@@ -71,6 +70,7 @@ def send_telegram(text_msg, buttons_data=None):
             headers={"Content-Type": "application/x-www-form-urlencoded"}
         )
         urllib.request.urlopen(req, timeout=12)
+        print("Telegram message delivered successfully!")
     except Exception as e:
         print(f"Telegram Delivery Error: {e}")
 
@@ -113,7 +113,7 @@ def manage_active_trades(active_trades):
             tv_link = f"https://in.tradingview.com/chart/?symbol={clean_sym}"
             buttons = [[{"text": "📊 Open TradingView Chart", "url": tv_link}]]
 
-            # 1. HARD STOP-LOSS HIT (Opposite Direction Move)
+            # 1. HARD STOP-LOSS HIT
             if curr_price <= sl_price:
                 msg = (
                     f"🚨 *STOP-LOSS HIT / REVERSAL EXIT*\n\n"
@@ -125,7 +125,7 @@ def manage_active_trades(active_trades):
                 send_telegram(msg, buttons)
                 continue
 
-            # 2. FALSE BREAKOUT EARLY INVALIDATION (Price falls back inside range)
+            # 2. FALSE BREAKOUT EARLY INVALIDATION
             elif curr_price < breakout_level and not info.get("tp1_alerted", False):
                 c1 = float(df['Close'].iloc[-1])
                 c2 = float(df['Close'].iloc[-2])
@@ -140,7 +140,7 @@ def manage_active_trades(active_trades):
                     send_telegram(msg, buttons)
                     continue
 
-            # 3. TARGET 1 REACHED (Partial Profit + Trail SL to Cost)
+            # 3. TARGET 1 REACHED
             elif curr_price >= tp1_price and not info.get("tp1_alerted", False):
                 msg = (
                     f"🎯 *TARGET 1 ACHIEVED!*\n\n"
@@ -153,7 +153,7 @@ def manage_active_trades(active_trades):
                 info["sl"] = entry_price
                 updated_trades[ticker] = info
 
-            # 4. TARGET 2 REACHED (Full Exit)
+            # 4. TARGET 2 REACHED
             elif curr_price >= tp2_price:
                 msg = (
                     f"🎉 *FINAL TARGET 2 HIT - COMPLETE PROFIT!*\n\n"
@@ -180,7 +180,7 @@ def scan_high_accuracy_setup(ticker, sector_info, sent_cache, active_trades):
     try:
         sector_sym, sector_label = sector_info
 
-        # --- TIER 1: Daily Higher-Timeframe Filter ---
+        # Daily Trend Filter
         df_d = yf.download(ticker, period="6mo", interval="1d", progress=False)
         if df_d.empty or len(df_d) < 50:
             return
@@ -197,12 +197,11 @@ def scan_high_accuracy_setup(ticker, sector_info, sent_cache, active_trades):
         daily_rsi = float(ta.momentum.rsi(d_close, window=14).iloc[-1])
         recent_20d_high = float(d_high.iloc[-21:-1].max())
 
-        # Daily Trend Rule: Must be above Daily 50 EMA and RSI in healthy momentum
         d_ltp = float(d_close.iloc[-1])
         if d_ltp < daily_ema50 or daily_rsi < 50 or daily_rsi > 78:
             return
 
-        # --- TIER 2: 15-Minute Setup with Volatility & VSA ---
+        # 15-Minute Intraday Scan
         df_15m = yf.download(ticker, period="5d", interval="15m", progress=False)
         if df_15m.empty or len(df_15m) < 35:
             return
@@ -221,33 +220,27 @@ def scan_high_accuracy_setup(ticker, sector_info, sent_cache, active_trades):
         breakout_resistance = float(consolidation_window['High'].max())
         avg_15m_vol = float(consolidation_window['Volume'].mean()) or 1.0
 
-        # Rule 1: Resistance ke upar candle close honi chahiye
         if c_close <= breakout_resistance or c_close <= c_open:
             return
 
-        # Rule 2: VSA (Upper wick rejection avoid karein - rejection > 28% nahi honi chahiye)
         candle_range = c_high - c_low
         if candle_range > 0:
             closing_ratio = (c_close - c_low) / candle_range
             if closing_ratio < 0.72:
                 return
 
-        # Rule 3: Volume Surge (At least 1.6x Institutional Volume)
         rvol = c_vol / avg_15m_vol
         if rvol < 1.6:
             return
 
-        # Rule 4: TTM Volatility Squeeze Expansion Check
         bb_high = ta.volatility.bollinger_hband(consolidation_window['Close'], window=20, window_dev=2).iloc[-1]
         bb_low = ta.volatility.bollinger_lband(consolidation_window['Close'], window=20, window_dev=2).iloc[-1]
         kc_high = ta.volatility.keltner_channel_hband(consolidation_window['High'], consolidation_window['Low'], consolidation_window['Close'], window=20).iloc[-1]
         kc_low = ta.volatility.keltner_channel_lband(consolidation_window['High'], consolidation_window['Low'], consolidation_window['Close'], window=20).iloc[-1]
         was_in_squeeze = (bb_low > kc_low) and (bb_high < kc_high)
 
-        # Rule 5: Sector Trend
         is_sector_green = check_sector_health(sector_sym)
 
-        # Classification: INTRADAY vs SWING DELIVERY
         is_multiday_breakout = c_close > recent_20d_high
         if is_multiday_breakout:
             trade_type = "📦 SWING / POSITIONAL (DELIVERY)"
@@ -262,7 +255,6 @@ def scan_high_accuracy_setup(ticker, sector_info, sent_cache, active_trades):
             tp1 = round(c_close + (0.9 * daily_atr), 2)
             tp2 = round(c_close + (1.8 * daily_atr), 2)
 
-        # Conviction Grade
         if is_sector_green and was_in_squeeze and rvol >= 2.2:
             grade = "💎 GRADE-A+ (INSTITUTIONAL HIGH CONVICTION)"
         elif is_sector_green and rvol >= 1.8:
@@ -316,21 +308,22 @@ def scan_high_accuracy_setup(ticker, sector_info, sent_cache, active_trades):
         print(f"Error checking {ticker}: {e}")
 
 if __name__ == "__main__":
-    if __name__ == "__main__":
-    send_telegram("🧪 *Test Alert:* Scanner live hai aur aapke Telegram par successfully message deliver ho raha hai!")
+    # --- INSTANT TEST LINE FOR YOUR OLD TELEGRAM CHAT ---
+    send_telegram("🧪 *Live System Verification:* Scanner bot successfully connected hai aur background scan chalu hai!")
+
     today_str = datetime.utcnow().strftime("%Y-%m-%d")
 
     cache_data = load_json(CACHE_FILE, {"date": today_str, "tickers": []})
     sent_cache = set(cache_data.get("tickers", [])) if cache_data.get("date") == today_str else set()
     active_trades = load_json(ACTIVE_TRADES_FILE, {})
 
-    # Step 1: Running trades ko check karein (SL hit / False breakout / Target hit)
+    # Step 1: Running trades tracking
     active_trades = manage_active_trades(active_trades)
 
-    # Step 2: Naye high-accuracy institutional setups scan karein
+    # Step 2: Multi-market scan
     for sym, sec_data in WATCHLIST.items():
         scan_high_accuracy_setup(sym, sec_data, sent_cache, active_trades)
 
-    # Step 3: File state update karein
+    # Step 3: Save state
     save_json(CACHE_FILE, {"date": today_str, "tickers": list(sent_cache)})
     save_json(ACTIVE_TRADES_FILE, active_trades)
