@@ -1,158 +1,73 @@
-import streamlit as st
-import yfinance as yf
-import pandas as pd
-import ta
 import urllib.parse
 import urllib.request
-from streamlit_autorefresh import st_autorefresh
+import pandas as pd
+import ta
+import yfinance as yf
 
-st.set_page_config(page_title="Pro Market Scanner", layout="centered")
-
-# --- Telegram Alert Credentials ---
+# Telegram Credentials
 TELEGRAM_BOT_TOKEN = "8732059380:AAGF7qoak6yPiI5ToYGPLSVQQM4GChhKriI"
 TELEGRAM_CHAT_ID = "1527960238"
 
-# Duplicate alert cache in session
-if "sent_alerts" not in st.session_state:
-    st.session_state.sent_alerts = set()
+ASSETS = {
+    "INDIAN_STOCKS": [
+        "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "ICICIBANK.NS",
+        "INFY.NS", "TATAMOTORS.NS", "SBIN.NS", "TITAN.NS"
+    ],
+    "US_STOCKS": [
+        "NVDA", "TSLA", "AAPL", "MSFT", "AMZN", "GOOGL", "META"
+    ],
+    "CRYPTO": [
+        "BTC-USD", "ETH-USD", "SOL-USD", "BNB-USD", "XRP-USD"
+    ],
+    "FOREX_COMMODITIES": [
+        "GC=F", "CL=F", "EURUSD=X", "GBPUSD=X", "USDINR=X"
+    ]
+}
 
-def send_telegram_alert(message, asset_key):
-    if asset_key in st.session_state.sent_alerts:
-        return
+def send_alert(message):
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
         data = urllib.parse.urlencode({
             "chat_id": TELEGRAM_CHAT_ID,
             "text": message,
-            "parse_mode": "Markdown"
+            "parse_mode": "Markdown",
+            "disable_web_page_preview": "true"
         }).encode("utf-8")
         req = urllib.request.Request(url, data=data)
-        urllib.request.urlopen(req, timeout=5)
-        st.session_state.sent_alerts.add(asset_key)
+        urllib.request.urlopen(req, timeout=15)
+    except Exception as e:
+        print(f"Telegram Delivery Error: {e}")
+
+def get_market_trend(symbol):
+    try:
+        data = yf.download(symbol, period="1mo", interval="1d", progress=False)
+        if data.empty:
+            return True
+        if isinstance(data.columns, pd.MultiIndex):
+            data.columns = [col[0] for col in data.columns]
+        close = data['Close']
+        ema_20 = ta.trend.ema_indicator(close, window=20)
+        return float(close.iloc[-1]) >= float(ema_20.iloc[-1])
     except Exception:
-        pass
+        return True
 
-# CSS to lock layout for mobile screens
-st.markdown("""
-<style>
-    .block-container {
-        padding-top: 0.8rem;
-        padding-bottom: 1rem;
-        padding-left: 0.2rem;
-        padding-right: 0.2rem;
-    }
-    .custom-table {
-        width: 100% !important;
-        border-collapse: collapse;
-        font-size: 11px;
-        margin-top: 8px;
-    }
-    .custom-table th {
-        background-color: #1e293b;
-        color: #ffffff;
-        font-weight: 600;
-        text-align: center;
-        padding: 6px 2px;
-        border: 1px solid #334155;
-    }
-    .custom-table td {
-        text-align: center;
-        padding: 5px 2px;
-        border: 1px solid #cbd5e1;
-        vertical-align: middle;
-    }
-    .chart-link {
-        color: #0284c7;
-        text-decoration: none;
-        font-weight: bold;
-    }
-    .badge-strong {
-        background-color: #16a34a;
-        color: white;
-        padding: 2px 3px;
-        border-radius: 3px;
-        font-weight: bold;
-        font-size: 9px;
-    }
-    .badge-breakout {
-        background-color: #ea580c;
-        color: white;
-        padding: 2px 3px;
-        border-radius: 3px;
-        font-weight: bold;
-        font-size: 9px;
-    }
-    .badge-vol {
-        background-color: #2563eb;
-        color: white;
-        padding: 2px 3px;
-        border-radius: 3px;
-        font-weight: bold;
-        font-size: 9px;
-    }
-    .badge-watch {
-        color: #64748b;
-        font-size: 9px;
-    }
-</style>
-""", unsafe_allow_html=True)
+def get_tv_link(ticker, category):
+    if category == "INDIAN_STOCKS":
+        sym = ticker.replace(".NS", "")
+        return f"https://in.tradingview.com/chart/?symbol=NSE%3A{sym}", sym, "₹"
+    elif category == "CRYPTO":
+        sym = ticker.replace("-USD", "USDT")
+        return f"https://in.tradingview.com/chart/?symbol=BINANCE%3A{sym}", ticker, "$"
+    elif category == "US_STOCKS":
+        return f"https://in.tradingview.com/chart/?symbol=NASDAQ%3A{ticker}", ticker, "$"
+    else:
+        clean_sym = ticker.replace("=X", "").replace("=F", "")
+        return f"https://in.tradingview.com/chart/?symbol={clean_sym}", ticker, ""
 
-st.subheader("⚡ Pro Market Scanner")
-
-# Controls row
-c1, c2 = st.columns([1.2, 1])
-with c1:
-    market_choice = st.selectbox(
-        "Market:",
-        ["Indian Stocks (NSE)", "US Stocks (NASDAQ/NYSE)", "Forex (Currencies)", "Crypto"]
-    )
-with c2:
-    auto_refresh = st.checkbox("Auto Refresh (5 Min)", value=True)
-    if auto_refresh:
-        # 5 minutes = 300,000 milliseconds
-        st_autorefresh(interval=300000, key="datarefresh")
-
-# Position sizing risk input
-col_risk, col_flt = st.columns([1, 1])
-with col_risk:
-    max_risk = st.number_input("Risk Limit per Trade (₹/$):", min_value=100, value=1000, step=100)
-with col_flt:
-    filter_active = st.checkbox("Sirf Breakouts 🔥", value=False)
-
-if market_choice == "Indian Stocks (NSE)":
-    currency = "₹"
-    tv_prefix = "NSE"
-    WATCHLIST = [
-        "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "ICICIBANK.NS", "INFY.NS",
-        "BHARTIARTL.NS", "ITC.NS", "LT.NS", "TATAMOTORS.NS", "SBIN.NS",
-        "ADANIENT.NS", "SUNPHARMA.NS", "BAJFINANCE.NS", "TITAN.NS", "TATASTEEL.NS"
-    ]
-elif market_choice == "US Stocks (NASDAQ/NYSE)":
-    currency = "$"
-    tv_prefix = "NASDAQ"
-    WATCHLIST = [
-        "AAPL", "NVDA", "TSLA", "MSFT", "AMZN",
-        "META", "GOOGL", "AMD", "NFLX", "INTC"
-    ]
-elif market_choice == "Forex (Currencies)":
-    currency = ""
-    tv_prefix = "FX"
-    WATCHLIST = [
-        "USDINR=X", "EURUSD=X", "GBPUSD=X", "USDJPY=X", 
-        "AUDUSD=X", "USDCAD=X", "USDCHF=X", "EURINR=X", 
-        "GBPINR=X", "JPYINR=X"
-    ]
-else:
-    currency = "$"
-    tv_prefix = "BINANCE"
-    WATCHLIST = [
-        "BTC-USD", "ETH-USD", "SOL-USD", "BNB-USD", "XRP-USD", "DOGE-USD"
-    ]
-
-def fetch_pro_analysis(ticker):
+def scan_symbol(ticker, category, market_bullish):
     try:
         df = yf.download(ticker, period="6mo", interval="1d", progress=False)
-        if df.empty or len(df) < 50:
+        if df.empty or len(df) < 30:
             return None
 
         if isinstance(df.columns, pd.MultiIndex):
@@ -163,117 +78,105 @@ def fetch_pro_analysis(ticker):
         low = df['Low']
         volume = df['Volume']
 
-        rsi_series = ta.momentum.rsi(close, window=14)
-        atr_series = ta.volatility.average_true_range(high, low, close, window=14)
-        vol_sma_series = volume.rolling(window=20).mean()
         ema_50 = ta.trend.ema_indicator(close, window=50)
-
-        # Volatility Squeeze (Bollinger Band inside Keltner Channel)
-        bb_upper = ta.volatility.bollinger_hband(close, window=20, window_dev=2)
-        bb_lower = ta.volatility.bollinger_lband(close, window=20, window_dev=2)
-        kc_upper = ema_50 + (1.5 * atr_series)
-        kc_lower = ema_50 - (1.5 * atr_series)
+        atr = ta.volatility.average_true_range(high, low, close, window=14)
+        vol_sma20 = volume.rolling(window=20).mean()
+        rsi = ta.momentum.rsi(close, window=14)
 
         ltp = float(close.iloc[-1])
-        curr_rsi = float(rsi_series.iloc[-1]) if not rsi_series.empty else 50.0
-        curr_atr = float(atr_series.iloc[-1]) if not atr_series.empty else (ltp * 0.015)
+        c_atr = float(atr.iloc[-1]) if not atr.empty else (ltp * 0.02)
+        c_ema50 = float(ema_50.iloc[-1]) if not ema_50.empty else ltp
         curr_vol = float(volume.iloc[-1]) if not volume.empty else 0
-        avg_vol = float(vol_sma_series.iloc[-1]) if not vol_sma_series.empty else 1
-        curr_ema50 = float(ema_50.iloc[-1]) if not ema_50.empty else ltp
+        avg_vol = float(vol_sma20.iloc[-1]) if not vol_sma20.empty else 1
+        c_rsi = float(rsi.iloc[-1]) if not rsi.empty else 50
 
-        recent_high = float(high.iloc[-21:-1].max())
+        # Breakout condition: last 20 candle high breakout
+        recent_high = float(high.iloc[-21:-1].max()) if len(high) >= 22 else float(high.max())
+        is_breakout = ltp > recent_high and ltp >= c_ema50
 
-        is_breakout = ltp > recent_high
-        is_volume_spike = curr_vol > (1.5 * avg_vol) if avg_vol > 0 else False
-        is_trend_bullish = ltp > curr_ema50
-        is_squeeze = (float(bb_upper.iloc[-1]) < float(kc_upper.iloc[-1])) and (float(bb_lower.iloc[-1]) > float(kc_lower.iloc[-1]))
+        rvol = curr_vol / avg_vol if avg_vol > 0 else 1.0
 
-        signal = "WATCH"
-        if is_breakout and is_volume_spike and is_trend_bullish:
-            signal = "🚀 STRONG"
-        elif is_breakout:
-            signal = "🔥 BREAKOUT"
-        elif is_squeeze and is_trend_bullish:
-            signal = "⚡ SQUEEZE"
-        elif is_volume_spike:
-            signal = "⚡ VOL SURGE"
+        if not is_breakout:
+            return None
 
-        dec = 4 if "=X" in ticker else 2
-        buy_level = round(ltp, dec)
-        stop_loss = round(ltp - curr_atr, dec)
-        target = round(ltp + (2 * curr_atr), dec)
+        # Grade logic
+        if market_bullish and rvol >= 1.6 and (50 <= c_rsi <= 75):
+            grade = "💎 GRADE-A+ (INSTITUTIONAL HIGH-CONVICTION)"
+        elif rvol >= 1.3:
+            grade = "🔥 GRADE-A (STRONG MOMENTUM BREAKOUT)"
+        else:
+            grade = "⚡ GRADE-B (BREAKOUT)"
 
-        # Dynamic position sizing based on ATR risk
-        risk_per_share = curr_atr if curr_atr > 0 else (ltp * 0.015)
-        shares_qty = int(max_risk / risk_per_share) if risk_per_share > 0 else 1
+        sl = round(ltp - (1.2 * c_atr), 2)
+        tp1 = round(ltp + (1.5 * c_atr), 2)
+        tp2 = round(ltp + (3.0 * c_atr), 2)
 
-        clean_symbol = ticker.replace(".NS", "").replace("=X", "")
-        tv_symbol = clean_symbol if "=X" not in ticker else clean_symbol.replace("INR", "USD")
-        tv_url = f"https://www.tradingview.com/chart/?symbol={tv_prefix}:{tv_symbol}"
+        tv_link, sym_clean, currency = get_tv_link(ticker, category)
+        regime_badge = "🟢 BULLISH" if market_bullish else "⚠️ CAUTION"
 
-        return {
-            "Asset": clean_symbol,
-            "ChartURL": tv_url,
-            "Buy": buy_level,
-            "SL": stop_loss,
-            "TP": target,
-            "Qty": max(shares_qty, 1),
-            "RSI": round(curr_rsi, 1),
-            "Signal": signal
+        category_labels = {
+            "INDIAN_STOCKS": "🇮🇳 Indian Equity",
+            "US_STOCKS": "🇺🇸 US Stock",
+            "CRYPTO": "🪙 Crypto",
+            "FOREX_COMMODITIES": "🌐 Forex/Commodity"
         }
-    except Exception:
+
+        msg = (
+            f"🎯 *{grade}*\n\n"
+            f"🏷️ *Market:* {category_labels.get(category, category)}\n"
+            f"📈 *Asset:* [{sym_clean}]({tv_link})\n"
+            f"🌐 *Macro Context:* {regime_badge}\n"
+            f"💵 *LTP:* {currency}{round(ltp, 2)}\n"
+            f"🛑 *Stop-Loss:* {currency}{sl}\n"
+            f"🎯 *Target 1 (1:1.5):* {currency}{tp1}\n"
+            f"🏆 *Target 2 (1:3):* {currency}{tp2}\n"
+            f"📊 *Volume Surge:* {round(rvol, 1)}x\n"
+            f"⚡ *RSI:* {round(c_rsi, 1)}\n\n"
+            f"🔗 [Open Chart in TradingView]({tv_link})"
+        )
+        return msg
+    except Exception as e:
+        print(f"Error scanning {ticker}: {e}")
         return None
 
-with st.spinner("Analyzing market..."):
-    results = []
-    for sym in WATCHLIST:
-        data = fetch_pro_analysis(sym)
-        if data:
-            results.append(data)
-            if data["Signal"] in ["🚀 STRONG", "🔥 BREAKOUT", "⚡ SQUEEZE", "⚡ VOL SURGE"]:
-                alert_text = (
-                    f"🚨 Pro Alert Triggered!\n"
-                    f"📈 Asset: {data['Asset']}\n"
-                    f"🎯 Signal: {data['Signal']}\n"
-                    f"💵 Buy: {currency}{data['Buy']}\n"
-                    f"🛑 SL: {currency}{data['SL']}\n"
-                    f"🏆 TP: {currency}{data['TP']}\n"
-                    f"📦 Position Size: {data['Qty']} shares\n"
-                    f"📊 RSI: {data['RSI']}"
-                )
-                send_telegram_alert(alert_text, f"{data['Asset']}_{data['Signal']}")
+if __name__ == "__main__":
+    nifty_bullish = get_market_trend("^NSEI")
+    spx_bullish = get_market_trend("^GSPC")
+    btc_bullish = get_market_trend("BTC-USD")
 
-if results:
-    display_list = [r for r in results if r["Signal"] != "WATCH"] if filter_active else results
+    total_scanned = 0
+    alerts_fired = 0
 
-    if display_list:
-        html = '<table class="custom-table">'
-        html += f'<thead><tr><th>Asset</th><th>Buy</th><th>SL</th><th>TP</th><th>Qty</th><th>RSI</th><th>Signal</th></tr></thead><tbody>'
-        
-        for row in display_list:
-            sig = row["Signal"]
-            if sig == "🚀 STRONG":
-                sig_html = f'<span class="badge-strong">{sig}</span>'
-            elif sig == "🔥 BREAKOUT":
-                sig_html = f'<span class="badge-breakout">{sig}</span>'
-            elif sig in ["⚡ VOL SURGE", "⚡ SQUEEZE"]:
-                sig_html = f'<span class="badge-vol">{sig}</span>'
-            else:
-                sig_html = f'<span class="badge-watch">{sig}</span>'
+    # 1. Indian Stocks
+    for sym in ASSETS["INDIAN_STOCKS"]:
+        total_scanned += 1
+        msg = scan_symbol(sym, "INDIAN_STOCKS", nifty_bullish)
+        if msg:
+            send_alert(msg)
+            alerts_fired += 1
 
-            html += f'<tr>'
-            html += f'<td><a class="chart-link" href="{row["ChartURL"]}" target="_blank">{row["Asset"]} ↗️</a></td>'
-            html += f'<td>{row["Buy"]}</td>'
-            html += f'<td style="color:#ef4444;">{row["SL"]}</td>'
-            html += f'<td style="color:#16a34a;">{row["TP"]}</td>'
-            html += f'<td><b>{row["Qty"]}</b></td>'
-            html += f'<td>{row["RSI"]}</td>'
-            html += f'<td>{sig_html}</td>'
-            html += f'</tr>'
+    # 2. US Stocks
+    for sym in ASSETS["US_STOCKS"]:
+        total_scanned += 1
+        msg = scan_symbol(sym, "US_STOCKS", spx_bullish)
+        if msg:
+            send_alert(msg)
+            alerts_fired += 1
 
-        html += '</tbody></table>'
-        st.markdown(html, unsafe_allow_html=True)
-    else:
-        st.info("Abhi koi breakout signal nahi mila.")
-else:
-    st.warning("Data load nahi ho saka.")
+    # 3. Crypto Assets
+    for sym in ASSETS["CRYPTO"]:
+        total_scanned += 1
+        msg = scan_symbol(sym, "CRYPTO", btc_bullish)
+        if msg:
+            send_alert(msg)
+            alerts_fired += 1
+
+    # 4. Forex & Commodities
+    for sym in ASSETS["FOREX_COMMODITIES"]:
+        total_scanned += 1
+        msg = scan_symbol(sym, "FOREX_COMMODITIES", True)
+        if msg:
+            send_alert(msg)
+            alerts_fired += 1
+
+    print(f"Scan finished. Total Scanned: {total_scanned}, Alerts sent: {alerts_fired}")
