@@ -76,6 +76,6 @@ def check_stock(ticker):
     except Exception as e:
         print(f"Check failed for {ticker}: {e}")
 
-if _name_ == "_main_":
+if __name__ == "__main__":
     for sym in WATCHLIST:
         check_stock(sym
