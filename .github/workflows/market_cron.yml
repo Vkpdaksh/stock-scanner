@@ -2,8 +2,11 @@ name: Market Background Scanner
 
 on:
   schedule:
-    - cron: '*/15 3-10 * * 1-5'
+    - cron: '*/30 * * * *'
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   run-scanner:
@@ -19,8 +22,15 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          pip install yfinance pandas ta
+          pip install yfinance pandas ta requests
 
       - name: Run Market Scan
         run: |
           python scanner_bot.py
+
+      - name: Commit Active Trades State
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Update active trades and alert state [skip ci]" && git push)
