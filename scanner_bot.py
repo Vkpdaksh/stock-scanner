@@ -308,9 +308,6 @@ def scan_high_accuracy_setup(ticker, sector_info, sent_cache, active_trades):
         print(f"Error checking {ticker}: {e}")
 
 if __name__ == "__main__":
-    # --- INSTANT TEST LINE FOR YOUR OLD TELEGRAM CHAT ---
-    send_telegram("🧪 *Live System Verification:* Scanner bot successfully connected hai aur background scan chalu hai!")
-
     today_str = datetime.utcnow().strftime("%Y-%m-%d")
 
     cache_data = load_json(CACHE_FILE, {"date": today_str, "tickers": []})
