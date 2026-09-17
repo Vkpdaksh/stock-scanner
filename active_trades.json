@@ -1,1 +1,13 @@
-{}
+{
+  "BTC-USD": {
+    "entry": 76914.39,
+    "breakout_level": 76741.55,
+    "sl": 75660.69,
+    "tp1": 78794.93,
+    "tp2": 80675.48,
+    "type": "\u26a1 INTRADAY (SAME-DAY)",
+    "currency": "$",
+    "tp1_alerted": false,
+    "time": "2026-09-17 12:38"
+  }
+}
