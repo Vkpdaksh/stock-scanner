@@ -9,7 +9,7 @@ import yfinance as yf
 
 # Aapka Original Personal Telegram Chat Credentials
 TELEGRAM_BOT_TOKEN = "8732059380:AAGF7qoak6yPiI5ToYGPLSVQQM4GChhKriI"
-TELEGRAM_CHAT_ID = "1527960238"
+TELEGRAM_CHAT_ID = "1004352653406"
 
 CACHE_FILE = "sent_alerts.json"
 ACTIVE_TRADES_FILE = "active_trades.json"
