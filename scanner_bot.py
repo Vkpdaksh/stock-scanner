@@ -316,6 +316,8 @@ def scan_high_accuracy_setup(ticker, sector_info, sent_cache, active_trades):
         print(f"Error checking {ticker}: {e}")
 
 if __name__ == "__main__":
+    if __name__ == "__main__":
+    send_telegram("🧪 *Test Alert:* Scanner live hai aur aapke Telegram par successfully message deliver ho raha hai!")
     today_str = datetime.utcnow().strftime("%Y-%m-%d")
 
     cache_data = load_json(CACHE_FILE, {"date": today_str, "tickers": []})
