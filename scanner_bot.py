@@ -25,12 +25,30 @@ def send_alert(message):
         req = urllib.request.Request(url, data=data)
         urllib.request.urlopen(req, timeout=10)
     except Exception as e:
-        print(f"Error sending message: {e}")
+        print(f"Telegram Alert Error: {e}")
 
-def check_stock(ticker):
+def get_nifty_regime():
+    """Filter 1: Market Trend Check via Nifty 50 (^NSEI)"""
     try:
-        df = yf.download(ticker, period="6mo", interval="1d", progress=False)
-        if df.empty or len(df) < 50:
+        nifty = yf.download("^NSEI", period="1mo", interval="1d", progress=False)
+        if nifty.empty:
+            return True  # Fallback: agar Nifty data na mile toh trade scan allow karein
+        if isinstance(nifty.columns, pd.MultiIndex):
+            nifty.columns = [col[0] for col in nifty.columns]
+        
+        close = nifty['Close']
+        ema_20 = ta.trend.ema_indicator(close, window=20)
+        
+        # Nifty apne 20 EMA se upar hona chahiye
+        return float(close.iloc[-1]) >= float(ema_20.iloc[-1])
+    except Exception as e:
+        print(f"Nifty Trend Check Failed: {e}")
+        return True
+
+def check_stock(ticker, market_bullish):
+    try:
+        df = yf.download(ticker, period="1y", interval="1d", progress=False)
+        if df.empty or len(df) < 200:
             return
 
         if isinstance(df.columns, pd.MultiIndex):
@@ -41,41 +59,59 @@ def check_stock(ticker):
         low = df['Low']
         volume = df['Volume']
 
+        # Advanced Technical Indicators
         rsi = ta.momentum.rsi(close, window=14)
         atr = ta.volatility.average_true_range(high, low, close, window=14)
-        vol_sma = volume.rolling(window=20).mean()
         ema_50 = ta.trend.ema_indicator(close, window=50)
+        ema_200 = ta.trend.ema_indicator(close, window=200)
+        vol_sma20 = volume.rolling(window=20).mean()
 
         ltp = float(close.iloc[-1])
-        recent_high = float(high.iloc[-21:-1].max())
+        c_rsi = float(rsi.iloc[-1])
+        c_atr = float(atr.iloc[-1])
+        c_ema50 = float(ema_50.iloc[-1])
+        c_ema200 = float(ema_200.iloc[-1])
         curr_vol = float(volume.iloc[-1]) if not volume.empty else 0
-        avg_vol = float(vol_sma.iloc[-1]) if not vol_sma.empty else 1
-        curr_ema = float(ema_50.iloc[-1])
+        avg_vol = float(vol_sma20.iloc[-1]) if not vol_sma20.empty else 1
 
-        is_breakout = ltp > recent_high
-        is_volume_spike = curr_vol > (1.5 * avg_vol)
-        is_trend_up = ltp > curr_ema
+        # Strict Institutional Conditions
+        recent_20d_high = float(high.iloc[-21:-1].max())
+        is_breakout = ltp > recent_20d_high
+        
+        # Filter 2: Long-Term & Medium-Term Macro Trend (LTP > EMA 50 > EMA 200)
+        is_macro_bullish = (ltp > c_ema50) and (c_ema50 > c_ema200)
+        
+        # Filter 3: Relative Volume (RVol) >= 1.8x Institutional Surge
+        rvol = curr_vol / avg_vol if avg_vol > 0 else 0
+        is_volume_confirmed = rvol >= 1.8
+        
+        # Filter 4: RSI Momentum Filter (RSI 55 - 72: strong momentum without extreme overbought trap)
+        is_momentum_healthy = 55 <= c_rsi <= 75
 
-        if is_breakout and is_trend_up:
-            sig = "🚀 STRONG BREAKOUT" if is_volume_spike else "🔥 BREAKOUT"
-            c_atr = float(atr.iloc[-1])
-            sl = round(ltp - c_atr, 2)
-            tp = round(ltp + (2 * c_atr), 2)
+        # All confirmations required
+        if is_breakout and is_macro_bullish and is_volume_confirmed and is_momentum_healthy:
+            # Dynamic Risk-to-Reward: SL at 1.25x ATR below LTP, TP at 2.5x ATR (1:2 R:R)
+            sl = round(ltp - (1.25 * c_atr), 2)
+            tp = round(ltp + (2.5 * c_atr), 2)
             sym = ticker.replace(".NS", "")
+            
+            regime_badge = "🟢 NIFTY ALIGNED" if market_bullish else "⚠️ WEAK MARKET"
 
             msg = (
-                f"🚨 Cloud Background Alert!\n\n"
-                f"📈 Stock: {sym}\n"
-                f"🎯 Signal: {sig}\n"
-                f"💵 LTP: ₹{round(ltp, 2)}\n"
-                f"🛑 SL: ₹{sl}\n"
-                f"🏆 TP: ₹{tp}\n"
-                f"📊 RSI: {round(float(rsi.iloc[-1]), 1)}"
+                f"💎 INSTITUTIONAL HIGH-CONVICTION BREAKOUT\n\n"
+                f"📈 Stock: #{sym}\n"
+                f"🌐 Market Context: {regime_badge}\n"
+                f"💵 Entry (LTP): ₹{round(ltp, 2)}\n"
+                f"🛑 Stop-Loss (SL): ₹{sl}\n"
+                f"🏆 Target (TP): ₹{tp} (1:2 R:R)\n"
+                f"📊 RVol: {round(rvol, 1)}x Average Volume\n"
+                f"⚡ RSI: {round(c_rsi, 1)} | EMA 200: ₹{round(c_ema200, 2)}"
             )
             send_alert(msg)
     except Exception as e:
         print(f"Check failed for {ticker}: {e}")
 
-if __name__ == "__main__":
+if _name_ == "_main_":
+    is_nifty_bullish = get_nifty_regime()
     for sym in WATCHLIST:
-        check_stock(sym)
+        check_stock(sym, is_nifty_bullish)
