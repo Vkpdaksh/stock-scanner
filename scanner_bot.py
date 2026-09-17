@@ -7,9 +7,12 @@ import pandas as pd
 import ta
 import yfinance as yf
 
-# Aapka Original Personal Telegram Chat Credentials
+# Bot Token aur Dono Chat IDs (Personal + Private Channel)
 TELEGRAM_BOT_TOKEN = "8732059380:AAGF7qoak6yPiI5ToYGPLSVQQM4GChhKriI"
-TELEGRAM_CHAT_ID = "1004352653406"
+TELEGRAM_CHAT_IDS = [
+    "1527960238",         # Aapka Personal Telegram Chat
+    "-1004352653406"       # Aapka Private Channel (Quant Move Alerts)
+]
 
 CACHE_FILE = "sent_alerts.json"
 ACTIVE_TRADES_FILE = "active_trades.json"
@@ -54,25 +57,29 @@ def save_json(filepath, data):
         print(f"Error saving {filepath}: {e}")
 
 def send_telegram(text_msg, buttons_data=None):
-    try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-        payload = {
-            "chat_id": TELEGRAM_CHAT_ID,
-            "text": text_msg,
-            "parse_mode": "Markdown",
-            "disable_web_page_preview": "true"
-        }
-        if buttons_data:
-            payload["reply_markup"] = json.dumps({"inline_keyboard": buttons_data})
-        req = urllib.request.Request(
-            url,
-            data=urllib.parse.urlencode(payload).encode("utf-8"),
-            headers={"Content-Type": "application/x-www-form-urlencoded"}
-        )
-        urllib.request.urlopen(req, timeout=12)
-        print("Telegram message delivered successfully!")
-    except Exception as e:
-        print(f"Telegram Delivery Error: {e}")
+    """Personal chat aur Private channel dono par message send karta hai"""
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    
+    for chat_id in TELEGRAM_CHAT_IDS:
+        try:
+            payload = {
+                "chat_id": chat_id,
+                "text": text_msg,
+                "parse_mode": "Markdown",
+                "disable_web_page_preview": "true"
+            }
+            if buttons_data:
+                payload["reply_markup"] = json.dumps({"inline_keyboard": buttons_data})
+            
+            req = urllib.request.Request(
+                url,
+                data=urllib.parse.urlencode(payload).encode("utf-8"),
+                headers={"Content-Type": "application/x-www-form-urlencoded"}
+            )
+            urllib.request.urlopen(req, timeout=12)
+            print(f"Delivered to {chat_id}")
+        except Exception as e:
+            print(f"Error delivering to {chat_id}: {e}")
 
 def check_sector_health(benchmark_sym):
     try:
@@ -314,7 +321,7 @@ if __name__ == "__main__":
     sent_cache = set(cache_data.get("tickers", [])) if cache_data.get("date") == today_str else set()
     active_trades = load_json(ACTIVE_TRADES_FILE, {})
 
-    # Step 1: Running trades tracking
+    # Step 1: Running trades tracking (SL & TP)
     active_trades = manage_active_trades(active_trades)
 
     # Step 2: Multi-market scan
