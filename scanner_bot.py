@@ -111,7 +111,7 @@ def check_stock(ticker, market_bullish):
     except Exception as e:
         print(f"Check failed for {ticker}: {e}")
 
-if _name_ == "_main_":
+if __name__ == "__main__":
     is_nifty_bullish = get_nifty_regime()
     for sym in WATCHLIST:
         check_stock(sym, is_nifty_bullish)
