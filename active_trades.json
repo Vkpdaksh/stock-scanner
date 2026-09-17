@@ -1,1 +1,13 @@
-{}
+{
+  "NVDA": {
+    "entry": 219.03,
+    "breakout_level": 218.7,
+    "sl": 215.14,
+    "tp1": 224.87,
+    "tp2": 230.71,
+    "type": "\u26a1 INTRADAY (SAME-DAY)",
+    "currency": "$",
+    "tp1_alerted": false,
+    "time": "2026-09-17 14:03"
+  }
+}
