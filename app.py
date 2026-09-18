@@ -9,7 +9,7 @@ import ta
 from datetime import datetime, timezone, timedelta
 
 # -------------------------------------------------------------
-# 1. PAGE SETUP (CLEAN DEFAULT STREAMLIT THEME PRESERVED)
+# 1. PAGE SETUP
 # -------------------------------------------------------------
 st.set_page_config(
     page_title="Institutional Trading Terminal",
@@ -36,7 +36,6 @@ def save_json(filepath, data):
     except Exception:
         pass
 
-# Initialize configs
 system_config = load_json(CONFIG_FILE, {"mode": "Beginner (Safe)", "execution": "Paper Trading"})
 paper_data = load_json(PAPER_TRADES_FILE, {"balance": 10000, "trades": []})
 
@@ -203,7 +202,6 @@ with col_risk:
         step=50
     )
 
-# Capital Risk Warning Badge
 current_balance = paper_data.get("balance", 10000)
 risk_pct = (risk_per_trade / current_balance) * 100 if current_balance > 0 else 0
 
@@ -267,7 +265,7 @@ if open_trades:
                 st.rerun()
 
 # -------------------------------------------------------------
-# 6. SECTOR MOMENTUM HEATMAP (COLORED CARDS)
+# 6. SECTOR MOMENTUM HEATMAP
 # -------------------------------------------------------------
 with st.expander("📊 Live Sectoral Momentum Heatmap (NSE)", expanded=True):
     try:
@@ -435,7 +433,7 @@ if raw_data is not None:
             continue
 
 # -------------------------------------------------------------
-# 8. BROWSER AUDIO BEEP CHIME (ON GRADE A+ BREAKOUTS)
+# 8. BROWSER AUDIO BEEP CHIME
 # -------------------------------------------------------------
 if has_sniper_alert:
     audio_chime = """
@@ -445,7 +443,7 @@ if has_sniper_alert:
         const osc = audioCtx.createOscillator();
         const gain = audioCtx.createGain();
         osc.type = 'sine';
-        osc.frequency.setValueAtTime(880, audioCtx.currentTime); // A5 note
+        osc.frequency.setValueAtTime(880, audioCtx.currentTime);
         gain.gain.setValueAtTime(0.08, audioCtx.currentTime);
         gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.6);
         osc.connect(gain);
@@ -482,7 +480,7 @@ else:
     st.info("No active breakout setups currently found in this asset pool.")
 
 # -------------------------------------------------------------
-# 11. DUAL EXECUTION DESK (PAPER TRADING + SMARTAPI REAL FUND)
+# 11. DUAL EXECUTION DESK
 # -------------------------------------------------------------
 st.markdown("### ⚡ Order Execution Desk")
 ord_col1, ord_col2, ord_col3, ord_col4 = st.columns([2, 1.2, 1.2, 1.5])
