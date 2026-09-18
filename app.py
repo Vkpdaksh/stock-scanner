@@ -36,7 +36,7 @@ def save_json(filepath, data):
     except Exception:
         pass
 
-# Initialize configs with ₹10,000 capital default
+# Initialize configs
 system_config = load_json(CONFIG_FILE, {"mode": "Beginner (Safe)", "execution": "Paper Trading"})
 paper_data = load_json(PAPER_TRADES_FILE, {"balance": 10000, "trades": []})
 
@@ -208,7 +208,7 @@ current_balance = paper_data.get("balance", 10000)
 risk_pct = (risk_per_trade / current_balance) * 100 if current_balance > 0 else 0
 
 if risk_pct > 2.0:
-    st.warning(f"⚠️ **High Risk Alert:** Selected risk is **{risk_pct:.1f}%** of your capital! Beginners should strictly keep risk at **1% - 2% (₹100 - ₹200)**.")
+    st.warning(f"⚠️ **High Risk Alert:** Selected risk is **{risk_pct:.1f}%** of your capital! Beginners should keep risk at **1% - 2% (₹100 - ₹200)**.")
 else:
     st.success(f"✅ **Safe Risk Discipline:** Position risk is **{risk_pct:.1f}%** (Within the safe 1-2% bracket).")
 
@@ -237,7 +237,7 @@ with p3:
     st.metric("Open / Closed Trades", f"{len(open_trades)} Open | {len(closed_trades)} Closed")
 with p4:
     st.write("")
-    if st.button("🔄 Reset to ₹10k", help="Click to reset paper balance to ₹10,000 and clear trade log"):
+    if st.button("🔄 Reset to ₹10k", help="Reset balance to ₹10,000"):
         paper_data = {"balance": 10000, "trades": []}
         save_json(PAPER_TRADES_FILE, paper_data)
         st.success("Balance reset to ₹10,000!")
@@ -335,6 +335,7 @@ def fetch_market_data(ticker_list):
 raw_data = fetch_market_data(tickers) if tickers else None
 records = []
 active_breakouts = 0
+has_sniper_alert = False
 
 if raw_data is not None:
     for ticker in tickers:
@@ -378,6 +379,7 @@ if raw_data is not None:
                 trade_logic = f"Closed above resistance ({res_level:.2f}) with {rvol:.1f}x vol and VWAP support."
                 if (rvol >= 2.5 or is_special) and (c_close > ema50) and (rsi >= 58):
                     grade = "Grade A+ (Sniper)"
+                    has_sniper_alert = True
                 elif (rvol >= 1.6 or is_special) and (rsi >= 53):
                     grade = "Grade A (Inst.)"
                 else:
@@ -388,6 +390,7 @@ if raw_data is not None:
                 trade_logic = f"Closed below support ({sup_level:.2f}) with bearish volume pressure."
                 if (rvol >= 2.5 or is_special) and (c_close < ema50) and (rsi <= 42):
                     grade = "Grade A+ (Sniper)"
+                    has_sniper_alert = True
                 elif (rvol >= 1.6 or is_special) and (rsi <= 47):
                     grade = "Grade A (Inst.)"
                 else:
@@ -432,7 +435,30 @@ if raw_data is not None:
             continue
 
 # -------------------------------------------------------------
-# 8. METRIC CARDS ROW
+# 8. BROWSER AUDIO BEEP CHIME (ON GRADE A+ BREAKOUTS)
+# -------------------------------------------------------------
+if has_sniper_alert:
+    audio_chime = """
+    <script>
+    try {
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(880, audioCtx.currentTime); // A5 note
+        gain.gain.setValueAtTime(0.08, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.6);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + 0.6);
+    } catch(e) {}
+    </script>
+    """
+    components.html(audio_chime, height=0, width=0)
+
+# -------------------------------------------------------------
+# 9. METRIC CARDS ROW
 # -------------------------------------------------------------
 m1, m2, m3, m4 = st.columns(4)
 with m1:
@@ -447,7 +473,7 @@ with m4:
 st.markdown("---")
 
 # -------------------------------------------------------------
-# 9. MONITORING DATA TABLE
+# 10. MONITORING DATA TABLE
 # -------------------------------------------------------------
 if records:
     df_display = pd.DataFrame(records).drop(columns=["Ticker", "Size"])
@@ -456,7 +482,7 @@ else:
     st.info("No active breakout setups currently found in this asset pool.")
 
 # -------------------------------------------------------------
-# 10. DUAL EXECUTION DESK (PAPER TRADING + SMARTAPI REAL FUND)
+# 11. DUAL EXECUTION DESK (PAPER TRADING + SMARTAPI REAL FUND)
 # -------------------------------------------------------------
 st.markdown("### ⚡ Order Execution Desk")
 ord_col1, ord_col2, ord_col3, ord_col4 = st.columns([2, 1.2, 1.2, 1.5])
@@ -478,7 +504,6 @@ with ord_col4:
     st.write("")
     st.write("")
     
-    # 1. BEGINNER / PAPER TRADING:
     if is_beginner or execution_type == "Paper Trading":
         if st.button("📥 Record Virtual Paper Trade", use_container_width=True):
             if selected_item:
@@ -499,8 +524,6 @@ with ord_col4:
                 st.rerun()
             else:
                 st.warning("Asset select karein.")
-
-    # 2. PRO REAL FUND SMARTAPI:
     else:
         if st.button("🚀 Fire to Angel One (Real Fund)", use_container_width=True):
             if selected_item:
@@ -523,7 +546,7 @@ with ord_col4:
                 st.warning("Asset select karein.")
 
 # -------------------------------------------------------------
-# 11. COMPLETED PAPER TRADE HISTORY LEDGER
+# 12. COMPLETED PAPER TRADE HISTORY LEDGER
 # -------------------------------------------------------------
 if closed_trades:
     with st.expander("📜 Completed Paper Trades Ledger", expanded=False):
@@ -531,7 +554,7 @@ if closed_trades:
         st.dataframe(history_df, use_container_width=True, hide_index=True)
 
 # -------------------------------------------------------------
-# 12. INTERACTIVE TRADINGVIEW CANDLESTICK CHART
+# 13. INTERACTIVE TRADINGVIEW CANDLESTICK CHART
 # -------------------------------------------------------------
 st.markdown("### 📈 Interactive TradingView Live Chart")
 if records and selected_item:
