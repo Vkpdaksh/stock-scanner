@@ -7,6 +7,13 @@ from datetime import datetime, timezone, timedelta
 import pandas as pd
 import ta
 import yfinance as yf
+import pyotp
+
+# SmartAPI SDK Import
+try:
+    from SmartApi import SmartConnect
+except ImportError:
+    SmartConnect = None
 
 # -------------------------------------------------------------
 # CREDENTIALS & STORAGE PATHS
@@ -14,14 +21,47 @@ import yfinance as yf
 TELEGRAM_BOT_TOKEN = "8732059380:AAGF7qoak6yPiI5ToYGPLSVQQM4GChhKriI"
 TELEGRAM_CHAT_IDS = [
     "1527960238",         # Personal Chat
-    "-1004352653406"       # Private Channel (Quant Move Alerts)
+    "-1004352653406"       # Private Channel
 ]
 
 CACHE_FILE = "sent_alerts.json"
 ACTIVE_TRADES_FILE = "active_trades.json"
 DAILY_STATS_FILE = "daily_stats.json"
 
-DEFAULT_RISK_PER_TRADE = 1000  # Reference risk allocation in INR
+DEFAULT_RISK_PER_TRADE = 1000
+
+ANGEL_API_KEY = os.environ.get("ANGEL_API_KEY", "")
+ANGEL_CLIENT_ID = os.environ.get("ANGEL_CLIENT_ID", "")
+ANGEL_MPIN = os.environ.get("ANGEL_MPIN", "")
+ANGEL_TOTP_KEY = os.environ.get("ANGEL_TOTP_KEY", "")
+
+# -------------------------------------------------------------
+# ANGEL ONE SMARTAPI SESSION INITIALIZER
+# -------------------------------------------------------------
+smart_api_client = None
+
+def init_smart_api():
+    global smart_api_client
+    if not (ANGEL_API_KEY and ANGEL_CLIENT_ID and ANGEL_MPIN and ANGEL_TOTP_KEY):
+        print("[SmartAPI] Secrets not fully set in environment. Falling back to default feeds.")
+        return None
+    if SmartConnect is None:
+        print("[SmartAPI] smartapi-python not installed.")
+        return None
+    try:
+        totp = pyotp.TOTP(ANGEL_TOTP_KEY).now()
+        smart_api = SmartConnect(api_key=ANGEL_API_KEY)
+        session_data = smart_api.generateSession(ANGEL_CLIENT_ID, ANGEL_MPIN, totp)
+        if session_data.get("status"):
+            print(f"[SmartAPI] Successfully authenticated with Angel One for {ANGEL_CLIENT_ID}!")
+            smart_api_client = smart_api
+            return smart_api
+        else:
+            print(f"[SmartAPI] Login error: {session_data.get('message')}")
+            return None
+    except Exception as e:
+        print(f"[SmartAPI] Auth exception: {e}")
+        return None
 
 # -------------------------------------------------------------
 # WATCHLIST REGISTRY
@@ -82,21 +122,11 @@ def get_market_category(ticker):
     return "🌐 GLOBAL MARKET"
 
 def get_atm_option_details(index_ticker, spot_price):
-    if index_ticker == "^NSEI":
-        step = 50
-        lot_size = 25
-    elif index_ticker == "^NSEBANK":
-        step = 100
-        lot_size = 15
-    else:
-        step = 50
-        lot_size = 25
+    step = 50 if index_ticker == "^NSEI" else 100
+    lot_size = 25 if index_ticker == "^NSEI" else 15
     atm_strike = int(round(spot_price / step) * step)
     return atm_strike, lot_size
 
-# -------------------------------------------------------------
-# FILE HELPERS
-# -------------------------------------------------------------
 def load_json(filepath, default):
     if os.path.exists(filepath):
         try:
@@ -140,7 +170,7 @@ def get_ist_time():
     return utc_now + timedelta(hours=5, minutes=30)
 
 # -------------------------------------------------------------
-# ACTIVE TRADES MONITORING (EARLY EXIT + SL + TARGET 1 & 2)
+# ACTIVE TRADES MONITORING
 # -------------------------------------------------------------
 def monitor_active_trades(active_trades, daily_stats, today_str):
     if not active_trades:
@@ -205,9 +235,9 @@ def monitor_active_trades(active_trades, daily_stats, today_str):
                         f"⚠️ *EARLY REVERSAL DETECTED (EXIT BEFORE SL)*\n"
                         f"🏛️ *Market:* **{market_tag}**\n\n"
                         f"📉 *Asset:* **{display_name}**\n"
-                        f"🔍 *Reason:* Price dropped back below breakout base ({currency}{breakout_level})\n"
+                        f"🔍 *Reason:* Price dropped back below breakout support ({currency}{breakout_level})\n"
                         f"💵 *LTP:* {currency}{round(curr_price, 2)} (Entry: {currency}{entry_price})\n"
-                        f"💡 *Action:* **Exit near cost/minimal loss**. Breakout failed, avoid full SL.\n\n"
+                        f"💡 *Action:* **Exit near cost/minimal loss**. Breakout failed, do NOT hold for full SL.\n\n"
                         f"⚠️ *Disclaimer:* Algorithmic risk control alert."
                     )
                     send_telegram(msg, buttons)
@@ -556,10 +586,13 @@ if __name__ == "__main__":
     ist_now = get_ist_time()
     today_str = ist_now.strftime("%Y-%m-%d")
 
-    # Global Sleep Guard: Raat 11:00 PM se Subah 8:00 AM IST tak complete sleep
+    # Global Sleep Guard (11:00 PM - 8:00 AM IST)
     if ist_now.hour >= 23 or ist_now.hour < 8:
         print(f"[{ist_now.strftime('%H:%M IST')}] Night cutoff active (11:00 PM - 8:00 AM). Exiting clean.")
         exit(0)
+
+    # Initialize SmartAPI if credentials available
+    init_smart_api()
 
     cache_data = load_json(CACHE_FILE, {"date": today_str, "tickers": []})
     if cache_data.get("date") != today_str:
