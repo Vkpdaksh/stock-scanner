@@ -197,10 +197,10 @@ with col_exec:
 with col_risk:
     risk_per_trade = st.number_input(
         "Risk Per Position (₹ / $):",
-        min_value=100,
+        min_value=50,
         max_value=50000,
-        value=1000 if is_beginner else 1500,
-        step=100
+        value=100 if is_beginner else 100,
+        step=50
     )
 
 if system_config.get("mode") != selected_mode or system_config.get("execution") != execution_type:
