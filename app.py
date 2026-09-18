@@ -11,12 +11,10 @@ st.title("⚡ Pro Market Scanner")
 # COMPLETE WATCHLISTS
 # -------------------------------------------------------------
 INDIAN_STOCKS = [
-    # Bluechips & Heavyweights
     "RELIANCE.NS", "TCS.NS", "INFY.NS", "HDFCBANK.NS", "ICICIBANK.NS", "SBIN.NS", "AXISBANK.NS",
     "KOTAKBANK.NS", "LT.NS", "BHARTIARTL.NS", "ITC.NS", "HINDUNILVR.NS", "TATAMOTORS.NS", "MARUTI.NS",
     "M&M.NS", "SUNPHARMA.NS", "CIPLA.NS", "DRREDDY.NS", "TATASTEEL.NS", "JSWSTEEL.NS", "HINDALCO.NS",
     "TITAN.NS", "BAJFINANCE.NS", "ADANIENT.NS", "ADANIPORTS.NS", "NTPC.NS", "POWERGRID.NS", "ONGC.NS",
-    # Momentum Midcaps, Defence, Railway, Energy
     "SUZLON.NS", "IREDA.NS", "RVNL.NS", "IRFC.NS", "IRCON.NS", "RAILTEL.NS", "MAZDOCK.NS", "COCHINSHIP.NS",
     "HAL.NS", "BEL.NS", "BDL.NS", "BHEL.NS", "HUDCO.NS", "NBCC.NS", "SAIL.NS", "NMDC.NS", "NATIONALUM.NS",
     "BSE.NS", "CDSL.NS", "ANGELONE.NS", "MCX.NS", "TATATECH.NS", "TRENT.NS", "ZOMATO.NS", "JIOFIN.NS",
@@ -30,12 +28,10 @@ US_STOCKS = [
 ]
 
 FOREX_COMMODITIES = [
-    # Gold & Silver (Spot + Futures)
-    "XAUUSD=X",  # Gold Spot
-    "XAGUSD=X",  # Silver Spot
-    "GC=F",      # Gold Comex Futures
-    "SI=F",      # Silver Comex Futures
-    "CL=F",      # Crude Oil
+    # Gold & Silver (Global Liquid Benchmarks)
+    "GC=F",      # XAU/USD (Gold)
+    "SI=F",      # XAG/USD (Silver)
+    "CL=F",      # Crude Oil WTI
     "HG=F",      # Copper
     # 8 Major Global Currencies
     "INR=X",     # USD/INR
@@ -56,10 +52,10 @@ CRYPTO = [
 # Market Selection
 market_choice = st.selectbox(
     "Market Select Karein:",
-    ["Indian Stocks (NSE)", "US Stocks", "Forex & Commodities", "Crypto (24x7)"]
+    ["Forex & Commodities", "Indian Stocks (NSE)", "US Stocks", "Crypto (24x7)"]
 )
 
-only_breakouts = st.checkbox("Sirf Breakouts 🔥")
+only_breakouts = st.checkbox("Sirf Live Breakout Signals Dikhayein 🔥")
 
 if market_choice == "Indian Stocks (NSE)":
     selected_tickers = INDIAN_STOCKS
@@ -90,38 +86,45 @@ def fetch_and_scan(tickers):
                 continue
 
             close = float(df['Close'].iloc[-1])
+            open_p = float(df['Open'].iloc[-1])
             high_25 = float(df['High'].iloc[-25:-1].max())
             vol = float(df['Volume'].iloc[-1])
             avg_vol = float(df['Volume'].iloc[-25:-1].mean()) or 1.0
 
-            # RSI Calculation
             rsi_series = ta.momentum.rsi(df['Close'], window=14)
             rsi = round(float(rsi_series.dropna().iloc[-1]), 1) if not rsi_series.dropna().empty else 50.0
 
             rvol = round(vol / avg_vol, 2) if avg_vol > 0 else 1.0
-            is_breakout = close > high_25
+            
+            # Breakout Condition: Price clears 25-candle resistance
+            is_breakout = (close > high_25) and (close > open_p)
 
-            # ATR for Target / SL
             atr_series = ta.volatility.average_true_range(df['High'], df['Low'], df['Close'], window=14)
             atr = float(atr_series.dropna().iloc[-1]) if not atr_series.dropna().empty else (close * 0.01)
 
             sl = round(close - (1.0 * atr), 2 if "=" not in ticker else 4)
             tp = round(close + (1.5 * atr), 2 if "=" not in ticker else 4)
 
+            # Clean Display Names
             display_name = ticker.replace(".NS", "").replace("-USD", "").replace("=F", "").replace("=X", "")
-            if ticker == "XAUUSD=X":
-                display_name = "GOLD Spot (XAUUSD)"
-            elif ticker == "XAGUSD=X":
-                display_name = "SILVER Spot (XAGUSD)"
+            if ticker == "GC=F":
+                display_name = "XAUUSD (Gold)"
+            elif ticker == "SI=F":
+                display_name = "XAGUSD (Silver)"
+            elif ticker == "CL=F":
+                display_name = "CRUDE OIL"
+
+            signal_text = "🟢 BUY BREAKOUT" if is_breakout else "⚪ WAITING"
 
             results.append({
                 "Asset": display_name,
-                "Buy": f"{currency_sym}{round(close, 2 if '=' not in ticker else 4)}",
+                "Signal": signal_text,
+                "LTP": f"{currency_sym}{round(close, 2 if '=' not in ticker else 4)}",
                 "SL": f"{currency_sym}{sl}",
-                "TP": f"{currency_sym}{tp}",
+                "Target": f"{currency_sym}{tp}",
                 "RSI": rsi,
                 "RVol": rvol,
-                "Breakout": is_breakout
+                "Is_Breakout": is_breakout
             })
         except Exception:
             continue
@@ -133,8 +136,8 @@ with st.spinner("Market Data Scan Ho Raha Hai..."):
 
 if not df_results.empty:
     if only_breakouts:
-        df_results = df_results[df_results["Breakout"] == True]
+        df_results = df_results[df_results["Is_Breakout"] == True]
     
-    st.dataframe(df_results.drop(columns=["Breakout"]), use_container_width=True, height=600)
+    st.dataframe(df_results.drop(columns=["Is_Breakout"]), use_container_width=True, height=620)
 else:
-    st.info("Data load ho raha hai, kripya refresh karein.")
+    st.info("Data load ho raha hai, kripya page refresh karein.")
