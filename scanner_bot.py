@@ -9,6 +9,10 @@ import numpy as np
 import ta
 import yfinance as yf
 import pyotp
+import requests
+import matplotlib
+matplotlib.use('Agg')  # Headless mode for server execution
+import matplotlib.pyplot as plt
 
 # -------------------------------------------------------------
 # CONFIGURATION & CONSTANTS
@@ -24,7 +28,7 @@ ACTIVE_TRADES_FILE = "active_trades.json"
 DAILY_STATS_FILE = "daily_stats.json"
 
 DEFAULT_RISK_PER_TRADE = 1000       # Standard INR risk per trade
-DAILY_MAX_LOSS_LIMIT = 2500         # Loss Limit for Sniper Mode Activation
+DAILY_MAX_LOSS_LIMIT = 2500         # Loss Limit for Sniper Activation
 
 ANGEL_API_KEY = os.environ.get("ANGEL_API_KEY", "")
 ANGEL_CLIENT_ID = os.environ.get("ANGEL_CLIENT_ID", "")
@@ -137,28 +141,6 @@ def save_json(filepath, data):
     except Exception:
         pass
 
-def send_telegram(text_msg, buttons_data=None):
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    for chat_id in TELEGRAM_CHAT_IDS:
-        try:
-            payload = {
-                "chat_id": chat_id,
-                "text": text_msg,
-                "parse_mode": "Markdown",
-                "disable_web_page_preview": "true"
-            }
-            if buttons_data:
-                payload["reply_markup"] = json.dumps({"inline_keyboard": buttons_data})
-            
-            req = urllib.request.Request(
-                url,
-                data=urllib.parse.urlencode(payload).encode("utf-8"),
-                headers={"Content-Type": "application/x-www-form-urlencoded"}
-            )
-            urllib.request.urlopen(req, timeout=10)
-        except Exception as e:
-            print(f"Telegram error: {e}")
-
 def get_ist_time():
     utc_now = datetime.now(timezone.utc)
     return utc_now + timedelta(hours=5, minutes=30)
@@ -184,7 +166,93 @@ def calculate_chandelier_exit(df, period=22, mult=3.0):
     return float(long_stop.dropna().iloc[-1]) if not long_stop.dropna().empty else float(df['Low'].iloc[-1])
 
 # -------------------------------------------------------------
-# ACTIVE TRADES MONITORING & TRAILING ENGINE
+# VISUAL CHART GENERATOR (MATPLOTLIB)
+# -------------------------------------------------------------
+def generate_chart_snapshot(df, ticker, display_name, entry, sl, tp1, tp2):
+    chart_path = f"/tmp/{ticker.replace('^', '').replace('=', '').replace(':', '')}_chart.png"
+    try:
+        sub_df = df.iloc[-35:].copy()
+        fig, ax = plt.subplots(figsize=(9, 4.8), dpi=120)
+        fig.patch.set_facecolor('#131722')
+        ax.set_facecolor('#131722')
+
+        # Draw Candlesticks
+        for idx, (t, row) in enumerate(sub_df.iterrows()):
+            color = '#26a69a' if row['Close'] >= row['Open'] else '#ef5350'
+            ax.vlines(x=idx, ymin=row['Low'], ymax=row['High'], color=color, linewidth=1.2)
+            body_bottom = min(row['Open'], row['Close'])
+            body_top = max(row['Open'], row['Close'])
+            body_height = max(body_top - body_bottom, (row['High'] - row['Low']) * 0.05)
+            ax.bar(x=idx, height=body_height, bottom=body_bottom, color=color, width=0.6)
+
+        # Plot Institutional Target & SL Lines
+        ax.axhline(entry, color='#29b6f6', linestyle='--', linewidth=1.5, label=f'Entry ({entry})')
+        ax.axhline(sl, color='#f44336', linestyle='--', linewidth=1.5, label=f'SL ({sl})')
+        ax.axhline(tp1, color='#81c784', linestyle=':', linewidth=1.4, label=f'TP1 ({tp1})')
+        ax.axhline(tp2, color='#4caf50', linestyle='-', linewidth=1.8, label=f'TP2 ({tp2})')
+
+        ax.set_title(f"{display_name} - 15m Institutional Breakout", color='#ffffff', fontsize=13, fontweight='bold', pad=10)
+        ax.tick_params(colors='#b2b5be', labelsize=8)
+        ax.grid(True, linestyle=':', alpha=0.25, color='#787b86')
+        ax.legend(loc='upper left', facecolor='#1e222d', edgecolor='#363c4e', labelcolor='#ffffff', fontsize=8)
+        
+        plt.tight_layout()
+        plt.savefig(chart_path, facecolor=fig.get_facecolor(), edgecolor='none')
+        plt.close(fig)
+        return chart_path
+    except Exception as e:
+        print(f"Chart error: {e}")
+        return None
+
+# -------------------------------------------------------------
+# TELEGRAM DISPATCHER (TEXT & PHOTO)
+# -------------------------------------------------------------
+def send_telegram(text_msg, buttons_data=None, chart_img_path=None):
+    for chat_id in TELEGRAM_CHAT_IDS:
+        try:
+            if chart_img_path and os.path.exists(chart_img_path):
+                # Send Photo with Caption
+                url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
+                payload = {
+                    "chat_id": chat_id,
+                    "caption": text_msg,
+                    "parse_mode": "Markdown"
+                }
+                if buttons_data:
+                    payload["reply_markup"] = json.dumps({"inline_keyboard": buttons_data})
+                
+                with open(chart_img_path, 'rb') as img_f:
+                    requests.post(url, data=payload, files={"photo": img_f}, timeout=15)
+            else:
+                # Send Text Message
+                url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+                payload = {
+                    "chat_id": chat_id,
+                    "text": text_msg,
+                    "parse_mode": "Markdown",
+                    "disable_web_page_preview": "true"
+                }
+                if buttons_data:
+                    payload["reply_markup"] = json.dumps({"inline_keyboard": buttons_data})
+                
+                req = urllib.request.Request(
+                    url,
+                    data=urllib.parse.urlencode(payload).encode("utf-8"),
+                    headers={"Content-Type": "application/x-www-form-urlencoded"}
+                )
+                urllib.request.urlopen(req, timeout=10)
+        except Exception as e:
+            print(f"Telegram dispatch error: {e}")
+
+    # Remove temporary chart image after sending
+    if chart_img_path and os.path.exists(chart_img_path):
+        try:
+            os.remove(chart_img_path)
+        except Exception:
+            pass
+
+# -------------------------------------------------------------
+# ACTIVE TRADES MONITORING
 # -------------------------------------------------------------
 def monitor_active_trades(active_trades, daily_stats, today_str):
     if not active_trades:
@@ -388,7 +456,7 @@ def send_eod_summary(sent_cache, daily_stats, today_str, ist_now):
         print(f"[{ist_now.strftime('%H:%M IST')}] EOD Report sent.")
 
 # -------------------------------------------------------------
-# ULTRA-PRO BATCH SCANNER (WITH DYNAMIC GRADING & SNIPER LOGIC)
+# ULTRA-PRO BATCH SCANNER WITH VISUAL CHARTS & SNIPER ENGINE
 # -------------------------------------------------------------
 def run_ultra_pro_market_scan(sent_cache, active_trades, daily_stats, ist_now):
     net_loss = daily_stats.get("net_loss_today", 0)
@@ -477,7 +545,7 @@ def run_ultra_pro_market_scan(sent_cache, active_trades, daily_stats, ist_now):
                         elif rvol >= 1.3:
                             trade_grade = "Grade B (Momentum Scalp)"
                         else:
-                            continue  # Filter out low-grade setups
+                            continue
 
                     # Sniper Mode Check: When daily loss limit hit, strictly accept Grade A+ only
                     if is_sniper_mode and "Grade A+" not in trade_grade:
@@ -520,6 +588,8 @@ def run_ultra_pro_market_scan(sent_cache, active_trades, daily_stats, ist_now):
                             action_title = f"🔴 BUY {atm_strike} PUT (PE)"
                             is_pe = True
 
+                        chart_file = generate_chart_snapshot(df_15m, ticker, option_symbol, round(c_close, 2), sl_spot, tp1_spot, tp2_spot)
+
                         tv_link = f"https://in.tradingview.com/chart/?symbol={'NIFTY' if 'NIFTY 50' in index_name else 'BANKNIFTY'}"
                         buttons = [[{"text": "📊 Open Index Chart", "url": tv_link}]]
 
@@ -542,7 +612,7 @@ def run_ultra_pro_market_scan(sent_cache, active_trades, daily_stats, ist_now):
                             f"⚠️ *Disclaimer:* Algorithmic study. Strictly follow stop loss."
                         )
 
-                        send_telegram(msg, buttons)
+                        send_telegram(msg, buttons, chart_img_path=chart_file)
                         sent_cache.add(ticker)
                         active_trades[ticker] = {
                             "entry": round(c_close, 2),
@@ -582,6 +652,8 @@ def run_ultra_pro_market_scan(sent_cache, active_trades, daily_stats, ist_now):
                     risk_unit = max(round(c_close - sl, 4 if is_forex_or_comm else 2), 0.0001)
                     rec_qty = max(1, int(current_risk_cap / risk_unit)) if currency == "₹" else max(1, int(25 / risk_unit))
 
+                    chart_file = generate_chart_snapshot(df_15m, ticker, display_name, round(c_close, 2), sl, tp1, tp2)
+
                     clean_sym = ticker.replace(".NS", "").replace("-USD", "").replace("=F", "").replace("=X", "")
                     tv_link = f"https://in.tradingview.com/chart/?symbol={clean_sym}"
                     screener_link = f"https://www.screener.in/company/{clean_sym}/" if ".NS" in ticker else f"https://finviz.com/quote.ashx?t={clean_sym}"
@@ -613,7 +685,7 @@ def run_ultra_pro_market_scan(sent_cache, active_trades, daily_stats, ist_now):
                         ]
                     ]
 
-                    send_telegram(msg, buttons)
+                    send_telegram(msg, buttons, chart_img_path=chart_file)
                     sent_cache.add(ticker)
                     active_trades[ticker] = {
                         "entry": round(c_close, 4 if is_forex_or_comm else 2),
@@ -629,7 +701,7 @@ def run_ultra_pro_market_scan(sent_cache, active_trades, daily_stats, ist_now):
                         "tp1_hit": False,
                         "date": ist_now.strftime("%Y-%m-%d")
                     }
-                    print(f"Alert [{trade_grade}]: {display_name}")
+                    print(f"Alert with Chart [{trade_grade}]: {display_name}")
                 except Exception:
                     continue
 
@@ -668,7 +740,7 @@ if __name__ == "__main__":
     # 2. EOD Performance Report after 03:30 PM IST
     send_eod_summary(sent_cache, daily_stats, today_str, ist_now)
 
-    # 3. Run Ultra-Pro Market Scanner with Grading & Sniper Filters
+    # 3. Run Ultra-Pro Market Scanner with Live Charts & Grading
     run_ultra_pro_market_scan(sent_cache, active_trades, daily_stats, ist_now)
 
     # 4. Save state files
