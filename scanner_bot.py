@@ -28,8 +28,8 @@ DAILY_STATS_FILE = "daily_stats.json"
 PAPER_TRADES_FILE = "paper_trades.json"
 CONFIG_FILE = "system_mode.json"
 
-DEFAULT_RISK_PER_TRADE = 1000
-DAILY_MAX_LOSS_LIMIT = 2500
+DEFAULT_RISK_PER_TRADE = 100        # Standard INR risk per trade (₹100 default)
+DAILY_MAX_LOSS_LIMIT = 500          # Conservative Sniper loss cap (5 losses)
 
 # -------------------------------------------------------------
 # WATCHLIST REGISTRY
@@ -212,7 +212,7 @@ def monitor_active_trades(active_trades, daily_stats, paper_book, today_str):
             display_name = info.get("display_name", ticker)
 
             if curr_low <= sl_price:
-                msg = f"🛑 *STOP-LOSS HIT:* {display_name} reached SL ({currency}{sl_price}). Exit to protect capital."
+                msg = f"🛑 *STOP-LOSS HIT:* {display_name} hit SL ({currency}{sl_price}). Loss of -₹{DEFAULT_RISK_PER_TRADE} booked."
                 send_telegram(msg)
                 paper_book["trades"].append({"date": today_str, "asset": display_name, "pnl": -DEFAULT_RISK_PER_TRADE, "status": "SL"})
                 paper_book["balance"] -= DEFAULT_RISK_PER_TRADE
@@ -221,7 +221,7 @@ def monitor_active_trades(active_trades, daily_stats, paper_book, today_str):
             elif curr_high >= tp1_price and not info.get("tp1_hit", False):
                 st_trail = calculate_supertrend(df)
                 trail_level = max(entry_price, round(st_trail, 2))
-                msg = f"🎯 *TARGET 1 (1:1 RRR) HIT:* {display_name}! Book 50% profit. Trail SL to entry ({currency}{trail_level})."
+                msg = f"🎯 *TARGET 1 (1:1 RRR) HIT:* {display_name}! Book 50% profit (+₹{int(DEFAULT_RISK_PER_TRADE * 0.5)}). Trail SL to cost ({currency}{trail_level})."
                 send_telegram(msg)
                 info["tp1_hit"] = True
                 info["sl"] = trail_level
@@ -229,7 +229,7 @@ def monitor_active_trades(active_trades, daily_stats, paper_book, today_str):
                 paper_book["balance"] += int(DEFAULT_RISK_PER_TRADE * 0.5)
 
             elif curr_high >= tp2_price:
-                msg = f"🏆 *TARGET 2 (1:2 RRR) HIT:* {display_name}! Full profit booked."
+                msg = f"🏆 *TARGET 2 (1:2 RRR) HIT:* {display_name}! Full profit (+₹{DEFAULT_RISK_PER_TRADE * 2}) locked."
                 send_telegram(msg)
                 paper_book["trades"].append({"date": today_str, "asset": display_name, "pnl": DEFAULT_RISK_PER_TRADE * 2, "status": "TP2"})
                 paper_book["balance"] += DEFAULT_RISK_PER_TRADE * 2
@@ -242,7 +242,7 @@ def monitor_active_trades(active_trades, daily_stats, paper_book, today_str):
     return updated_trades
 
 # -------------------------------------------------------------
-# DYNAMIC SCANNER (BEGINNER VS PRO LOGIC)
+# DYNAMIC SCANNER ENGINE (BEGINNER VS PRO)
 # -------------------------------------------------------------
 def run_dynamic_scan(sent_cache, active_trades, daily_stats, paper_book, system_config, ist_now):
     today_str = ist_now.strftime("%Y-%m-%d")
@@ -257,7 +257,7 @@ def run_dynamic_scan(sent_cache, active_trades, daily_stats, paper_book, system_
     all_tickers = []
     for cat_name, cat_list in MARKET_CATEGORIES.items():
         if is_beginner and "OPTIONS" in cat_name:
-            continue  # Block options for beginner
+            continue
         all_tickers.extend(cat_list)
 
     scan_candidates = [t for t in all_tickers if t not in sent_cache and t not in active_trades]
@@ -265,10 +265,10 @@ def run_dynamic_scan(sent_cache, active_trades, daily_stats, paper_book, system_
         return
 
     try:
-        data = yf.download(scan_candidates[:30], period="5d", interval="15m", group_by='ticker', progress=False)
-        for ticker in scan_candidates[:30]:
+        data = yf.download(scan_candidates[:35], period="5d", interval="15m", group_by='ticker', progress=False)
+        for ticker in scan_candidates[:35]:
             try:
-                df = data[ticker] if len(scan_candidates[:30]) > 1 else data
+                df = data[ticker] if len(scan_candidates[:35]) > 1 else data
                 df = df.dropna()
                 if len(df) < 25: continue
 
@@ -294,30 +294,44 @@ def run_dynamic_scan(sent_cache, active_trades, daily_stats, paper_book, system_
                 display_name = NAME_MAP.get(ticker, ticker.replace(".NS", ""))
                 currency = "₹" if ".NS" in ticker else "$"
 
-                mode_badge = "🛡️ *[BEGINNER SAFE PAPER MODE]*" if is_beginner else "⚡ *[PRO TRADER MODE]*"
-                trade_count_str = f"Trade: {trades_today + 1}/{max_trades}" if is_beginner else "Unlimited Alert Stream"
+                mode_badge = "🛡️ *[BEGINNER SAFE MODE - ₹10,000 LEARNING FUND]*" if is_beginner else "⚡ *[PRO TRADER MODE]*"
+                trade_count_str = f"Today's Count: {trades_today + 1}/{max_trades}" if is_beginner else "Unlimited Alert Stream"
 
                 chart_img = generate_chart_snapshot(df, ticker, display_name, c_close, sl, tp1, tp2)
+
+                clean_sym = ticker.replace(".NS", "").replace("-USD", "").replace("=F", "").replace("=X", "")
+                tv_link = f"https://in.tradingview.com/chart/?symbol={clean_sym}"
+                terminal_link = "https://vkpdaksh-stock-scanner-app-ffa8vt.streamlit.app"
+                
+                buttons = [
+                    [
+                        {"text": "📊 Live Chart", "url": tv_link},
+                        {"text": "⚡ Open Web Terminal", "url": terminal_link}
+                    ]
+                ]
 
                 msg = (
                     f"{mode_badge}\n"
                     f"🎯 *BREAKOUT ALERT:* **{display_name}**\n\n"
-                    f"💵 *Entry:* {currency}{c_close:.2f} | *VWAP:* {currency}{c_vwap:.2f} ✅\n"
-                    f"🛑 *Stop-Loss:* {currency}{sl:.2f}\n"
-                    f"🎯 *Target 1 (1:1):* {currency}{tp1:.2f}\n"
-                    f"🏆 *Target 2 (1:2):* {currency}{tp2:.2f}\n\n"
+                    f"💵 *Reference Entry:* {currency}{c_close:.2f}\n"
+                    f"🌊 *Intraday VWAP:* {currency}{c_vwap:.2f} ✅\n"
+                    f"🛑 *Stop-Loss (SL):* {currency}{sl:.2f}\n"
+                    f"🎯 *Target 1 (1:1 RRR):* {currency}{tp1:.2f} (Book 50%)\n"
+                    f"🏆 *Target 2 (1:2 RRR):* {currency}{tp2:.2f} (Runner)\n\n"
                     f"📊 *Volume:* {rvol:.1f}x | *RSI:* {rsi:.1f}\n"
-                    f"🚦 *Discipline:* {trade_count_str}\n"
+                    f"🚦 *Risk Allocation:* ₹{DEFAULT_RISK_PER_TRADE} (1% Safe Cap)\n"
+                    f"📋 *Discipline Rule:* {trade_count_str}\n"
                 )
 
                 if is_beginner:
                     msg += (
-                        f"\n📚 *Beginner Checklist:*\n"
-                        f"• Wait for 15m candle close.\n"
-                        f"• Virtual paper trade recorded in system.\n"
+                        f"\n📚 *Beginner Entry Checklist:*\n"
+                        f"• Wait for current 15m candle close.\n"
+                        f"• Do not chase if price moved >0.3%.\n"
+                        f"• Recorded in Terminal Paper Portfolio.\n"
                     )
 
-                send_telegram(msg, chart_img_path=chart_img)
+                send_telegram(msg, buttons_data=buttons, chart_img_path=chart_img)
                 sent_cache.add(ticker)
                 active_trades[ticker] = {
                     "entry": c_close, "sl": sl, "tp1": tp1, "tp2": tp2,
@@ -342,7 +356,7 @@ if __name__ == "__main__":
 
     active_trades = load_json(ACTIVE_TRADES_FILE, {})
     daily_stats = load_json(DAILY_STATS_FILE, {})
-    paper_book = load_json(PAPER_TRADES_FILE, {"balance": 100000, "trades": []})
+    paper_book = load_json(PAPER_TRADES_FILE, {"balance": 10000, "trades": []})
 
     active_trades = monitor_active_trades(active_trades, daily_stats, paper_book, today_str)
     run_dynamic_scan(sent_cache, active_trades, daily_stats, paper_book, system_config, ist_now)
