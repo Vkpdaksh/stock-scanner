@@ -9,14 +9,8 @@ import ta
 import yfinance as yf
 import pyotp
 
-# SmartAPI SDK Import
-try:
-    from SmartApi import SmartConnect
-except ImportError:
-    SmartConnect = None
-
 # -------------------------------------------------------------
-# CREDENTIALS & STORAGE PATHS
+# CREDENTIALS & CONSTANTS
 # -------------------------------------------------------------
 TELEGRAM_BOT_TOKEN = "8732059380:AAGF7qoak6yPiI5ToYGPLSVQQM4GChhKriI"
 TELEGRAM_CHAT_IDS = [
@@ -28,7 +22,7 @@ CACHE_FILE = "sent_alerts.json"
 ACTIVE_TRADES_FILE = "active_trades.json"
 DAILY_STATS_FILE = "daily_stats.json"
 
-DEFAULT_RISK_PER_TRADE = 1000
+DEFAULT_RISK_PER_TRADE = 1000  # Default Risk Cap in INR
 
 ANGEL_API_KEY = os.environ.get("ANGEL_API_KEY", "")
 ANGEL_CLIENT_ID = os.environ.get("ANGEL_CLIENT_ID", "")
@@ -43,21 +37,19 @@ smart_api_client = None
 def init_smart_api():
     global smart_api_client
     if not (ANGEL_API_KEY and ANGEL_CLIENT_ID and ANGEL_MPIN and ANGEL_TOTP_KEY):
-        print("[SmartAPI] Secrets not fully set in environment. Falling back to default feeds.")
-        return None
-    if SmartConnect is None:
-        print("[SmartAPI] smartapi-python not installed.")
+        print("[SmartAPI] Secrets not provided. Operating on standard fallback feeds.")
         return None
     try:
+        from SmartApi import SmartConnect
         totp = pyotp.TOTP(ANGEL_TOTP_KEY).now()
         smart_api = SmartConnect(api_key=ANGEL_API_KEY)
         session_data = smart_api.generateSession(ANGEL_CLIENT_ID, ANGEL_MPIN, totp)
         if session_data.get("status"):
-            print(f"[SmartAPI] Successfully authenticated with Angel One for {ANGEL_CLIENT_ID}!")
+            print(f"[SmartAPI] Successfully authenticated with Angel One for Client: {ANGEL_CLIENT_ID}!")
             smart_api_client = smart_api
             return smart_api
         else:
-            print(f"[SmartAPI] Login error: {session_data.get('message')}")
+            print(f"[SmartAPI] Login error message: {session_data.get('message')}")
             return None
     except Exception as e:
         print(f"[SmartAPI] Auth exception: {e}")
@@ -162,15 +154,15 @@ def send_telegram(text_msg, buttons_data=None):
                 headers={"Content-Type": "application/x-www-form-urlencoded"}
             )
             urllib.request.urlopen(req, timeout=10)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"Telegram error: {e}")
 
 def get_ist_time():
     utc_now = datetime.now(timezone.utc)
     return utc_now + timedelta(hours=5, minutes=30)
 
 # -------------------------------------------------------------
-# ACTIVE TRADES MONITORING
+# ACTIVE TRADES MONITORING (SL, TP1, TP2, EARLY EXIT)
 # -------------------------------------------------------------
 def monitor_active_trades(active_trades, daily_stats, today_str):
     if not active_trades:
@@ -213,7 +205,7 @@ def monitor_active_trades(active_trades, daily_stats, today_str):
             tv_link = f"https://in.tradingview.com/chart/?symbol={clean_sym}"
             buttons = [[{"text": "📊 Open TradingView", "url": tv_link}]]
 
-            # LONG TRADES & CALL OPTIONS (CE)
+            # LONG TRADES / CALL OPTIONS (CE)
             if not is_pe:
                 if curr_low <= sl_price:
                     msg = (
@@ -229,15 +221,16 @@ def monitor_active_trades(active_trades, daily_stats, today_str):
                     daily_stats["closed_trades"].append({"date": today_str, "ticker": display_name, "result": "SL"})
                     continue
 
+                # EARLY REVERSAL DETECTION
                 c1, c2 = float(df['Close'].iloc[-1]), float(df['Close'].iloc[-2])
                 if (c1 < breakout_level and c2 < breakout_level) and not info.get("tp1_hit", False):
                     msg = (
                         f"⚠️ *EARLY REVERSAL DETECTED (EXIT BEFORE SL)*\n"
                         f"🏛️ *Market:* **{market_tag}**\n\n"
                         f"📉 *Asset:* **{display_name}**\n"
-                        f"🔍 *Reason:* Price dropped back below breakout support ({currency}{breakout_level})\n"
+                        f"🔍 *Reason:* Price dropped back below breakout level ({currency}{breakout_level})\n"
                         f"💵 *LTP:* {currency}{round(curr_price, 2)} (Entry: {currency}{entry_price})\n"
-                        f"💡 *Action:* **Exit near cost/minimal loss**. Breakout failed, do NOT hold for full SL.\n\n"
+                        f"💡 *Action:* **Exit near cost / minimal loss**. Breakout failed, do NOT hold for full SL.\n\n"
                         f"⚠️ *Disclaimer:* Algorithmic risk control alert."
                     )
                     send_telegram(msg, buttons)
@@ -439,7 +432,7 @@ def run_batch_market_scan(sent_cache, active_trades, ist_now):
                     rvol = (c_vol / avg_vol) if avg_vol > 0 else 1.0
                     vol_passed = True if (is_forex_or_comm or is_index) else (rvol >= 1.5)
 
-                    # 1. INDEX OPTIONS (NIFTY / BANK NIFTY)
+                    # 1. INDEX OPTIONS (NIFTY 50 & BANK NIFTY)
                     if is_index:
                         bullish_breakout = (c_close > res_level) and (c_close > c_open) and (c_close > ema20) and (rsi >= 52)
                         bearish_breakdown = (c_close < sup_level) and (c_close < c_open) and (c_close < ema20) and (rsi <= 48)
@@ -580,7 +573,7 @@ def run_batch_market_scan(sent_cache, active_trades, ist_now):
         time.sleep(1)
 
 # -------------------------------------------------------------
-# MAIN ENGINE
+# MAIN EXECUTION ENGINE
 # -------------------------------------------------------------
 if __name__ == "__main__":
     ist_now = get_ist_time()
@@ -588,10 +581,10 @@ if __name__ == "__main__":
 
     # Global Sleep Guard (11:00 PM - 8:00 AM IST)
     if ist_now.hour >= 23 or ist_now.hour < 8:
-        print(f"[{ist_now.strftime('%H:%M IST')}] Night cutoff active (11:00 PM - 8:00 AM). Exiting clean.")
+        print(f"[{ist_now.strftime('%H:%M IST')}] Night cutoff active (11:00 PM - 8:00 AM). Exiting cleanly.")
         exit(0)
 
-    # Initialize SmartAPI if credentials available
+    # 1. Initialize SmartAPI if credentials are provided
     init_smart_api()
 
     cache_data = load_json(CACHE_FILE, {"date": today_str, "tickers": []})
@@ -603,16 +596,16 @@ if __name__ == "__main__":
     active_trades = load_json(ACTIVE_TRADES_FILE, {})
     daily_stats = load_json(DAILY_STATS_FILE, {})
 
-    # 1. Monitor active trades
+    # 2. Monitor active trades
     active_trades = monitor_active_trades(active_trades, daily_stats, today_str)
 
-    # 2. Send EOD Performance Report after 03:30 PM IST
+    # 3. Send EOD Performance Report after 03:30 PM IST
     send_eod_summary(sent_cache, daily_stats, today_str, ist_now)
 
-    # 3. Run market scanner
+    # 4. Run market scanner
     run_batch_market_scan(sent_cache, active_trades, ist_now)
 
-    # 4. Save updated states
+    # 5. Save state
     save_json(CACHE_FILE, {"date": today_str, "tickers": list(sent_cache)})
     save_json(ACTIVE_TRADES_FILE, active_trades)
     save_json(DAILY_STATS_FILE, daily_stats)
