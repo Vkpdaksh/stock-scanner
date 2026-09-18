@@ -19,18 +19,53 @@ st.markdown("""
 st.title("⚡ Institutional Grade Trading Terminal")
 
 # -------------------------------------------------------------
-# UNIVERSE & BENCHMARKS
+# COMPLETE COMPREHENSIVE WATCHLISTS
 # -------------------------------------------------------------
 WATCHLISTS = {
-    "⚡ Index Options (Nifty & Bank Nifty)": ["^NSEI", "^NSEBANK", "NIFTY_FIN_SERVICE.NS"],
-    "Major Indices (Global & Sectors)": ["^NSEI", "^NSEBANK", "^CNXIT", "^CNXAUTO", "^CNXMETAL", "^IXIC", "^GSPC"],
-    "Forex & Commodities": ["GC=F", "SI=F", "CL=F", "HG=F", "INR=X", "EURUSD=X", "GBPUSD=X", "USDJPY=X"],
-    "Indian High-Beta Leaders": [
-        "RELIANCE.NS", "TCS.NS", "INFY.NS", "HDFCBANK.NS", "ICICIBANK.NS", "SBIN.NS",
-        "TATAMOTORS.NS", "TITAN.NS", "SUZLON.NS", "IREDA.NS", "RVNL.NS", "HAL.NS", "BEL.NS", "ZOMATO.NS"
+    "⚡ Index Options (Nifty & Bank Nifty)": [
+        "^NSEI", "^NSEBANK", "NIFTY_FIN_SERVICE.NS"
     ],
-    "US Momentum Tech": ["NVDA", "TSLA", "AAPL", "MSFT", "AMZN", "META", "GOOGL", "PLTR", "COIN"],
-    "Crypto (24x7)": ["BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD", "DOGE-USD"]
+    "Indian Momentum Leaders (60+ Stocks)": [
+        # Nifty 50 Bluechips & Banking
+        "RELIANCE.NS", "TCS.NS", "INFY.NS", "HDFCBANK.NS", "ICICIBANK.NS", "SBIN.NS", "AXISBANK.NS",
+        "KOTAKBANK.NS", "LT.NS", "BHARTIARTL.NS", "ITC.NS", "HINDUNILVR.NS", "TATAMOTORS.NS", "MARUTI.NS",
+        "M&M.NS", "SUNPHARMA.NS", "CIPLA.NS", "DRREDDY.NS", "TATASTEEL.NS", "JSWSTEEL.NS", "HINDALCO.NS",
+        "TITAN.NS", "BAJFINANCE.NS", "ADANIENT.NS", "ADANIPORTS.NS", "NTPC.NS", "POWERGRID.NS", "ONGC.NS",
+        
+        # High-Beta Midcaps, Defence, Railways & Energy Leaders
+        "SUZLON.NS", "IREDA.NS", "RVNL.NS", "IRFC.NS", "IRCON.NS", "RAILTEL.NS", "MAZDOCK.NS", "COCHINSHIP.NS",
+        "HAL.NS", "BEL.NS", "BDL.NS", "BHEL.NS", "HUDCO.NS", "NBCC.NS", "SAIL.NS", "NMDC.NS", "NATIONALUM.NS",
+        "BSE.NS", "CDSL.NS", "ANGELONE.NS", "MCX.NS", "TATATECH.NS", "TRENT.NS", "ZOMATO.NS", "JIOFIN.NS",
+        "DIXON.NS", "POLYCAB.NS", "KEI.NS", "KALYANKJIL.NS", "TATAPOWER.NS", "ADANIGREEN.NS", "PERSISTENT.NS",
+        "COFORGE.NS", "DLF.NS", "LODHA.NS", "AUROPHARMA.NS", "LUPIN.NS", "EXIDEIND.NS", "ASHOKLEY.NS"
+    ],
+    "US Tech Giants (Nasdaq Leaders)": [
+        "NVDA", "TSLA", "AAPL", "MSFT", "AMZN", "META", "GOOGL", "AMD", "NFLX", "PLTR",
+        "AVGO", "SMCI", "ARM", "QCOM", "INTC", "MU", "PANW", "CRWD", "COIN", "MSTR"
+    ],
+    "Forex & Commodities": [
+        # Gold, Silver & Energy
+        "GC=F",      # XAUUSD Gold Futures
+        "SI=F",      # XAGUSD Silver Futures
+        "CL=F",      # Crude Oil
+        "HG=F",      # Copper
+        # 8 Major Global Currencies
+        "INR=X",     # USD/INR
+        "EURUSD=X",  # EUR/USD
+        "GBPUSD=X",  # GBP/USD
+        "USDJPY=X",  # USD/JPY
+        "AUDUSD=X",  # AUD/USD
+        "USDCAD=X",  # USD/CAD
+        "USDCHF=X",  # USD/CHF
+        "NZDUSD=X"   # NZD/USD
+    ],
+    "Major Indices (Global & Sectors)": [
+        "^NSEI", "^NSEBANK", "^CNXIT", "^CNXAUTO", "^CNXMETAL", "^IXIC", "^GSPC", "^DJI"
+    ],
+    "Crypto (24x7)": [
+        "BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD", "BNB-USD",
+        "ADA-USD", "DOGE-USD", "AVAX-USD", "LINK-USD", "SUI-USD"
+    ]
 }
 
 NAME_MAP = {
@@ -42,10 +77,19 @@ NAME_MAP = {
     "^CNXMETAL": "NIFTY METAL",
     "^IXIC": "NASDAQ 100",
     "^GSPC": "S&P 500",
+    "^DJI": "DOW JONES",
     "GC=F": "XAUUSD (Gold)",
     "SI=F": "XAGUSD (Silver)",
     "CL=F": "CRUDE OIL",
-    "HG=F": "COPPER"
+    "HG=F": "COPPER",
+    "INR=X": "USD/INR",
+    "EURUSD=X": "EUR/USD",
+    "GBPUSD=X": "GBP/USD",
+    "USDJPY=X": "USD/JPY",
+    "AUDUSD=X": "AUD/USD",
+    "USDCAD=X": "USD/CAD",
+    "USDCHF=X": "USD/CHF",
+    "NZDUSD=X": "NZD/USD"
 }
 
 # -------------------------------------------------------------
@@ -86,7 +130,7 @@ def get_atm_strike(index_name, spot_price):
 @st.cache_data(ttl=30)
 def execute_institutional_scan(tickers, market_type, risk_amount):
     results = []
-    # Batch pull 15-minute execution timeframe
+    # Batch download 15m candles
     data_15m = yf.download(tickers, period="5d", interval="15m", group_by='ticker', progress=False)
 
     for ticker in tickers:
@@ -106,7 +150,7 @@ def execute_institutional_scan(tickers, market_type, risk_amount):
             avg_vol = float(prev_window['Volume'].mean()) or 1.0
             rvol = round(vol / avg_vol, 2) if avg_vol > 0 else 1.0
 
-            # Volatility & Momentum
+            # Volatility & Momentum Indicators
             atr_s = ta.volatility.average_true_range(df_15m['High'], df_15m['Low'], df_15m['Close'], window=14)
             atr = float(atr_s.dropna().iloc[-1]) if not atr_s.dropna().empty else (c_close * 0.005)
 
@@ -116,7 +160,7 @@ def execute_institutional_scan(tickers, market_type, risk_amount):
             ema20_s = ta.trend.ema_indicator(df_15m['Close'], window=20)
             ema20 = float(ema20_s.dropna().iloc[-1])
 
-            # Multi-Timeframe Checks
+            # Multi-Timeframe / Liquidity Checks
             is_index_or_fx = ("^" in ticker or "=" in ticker or "Index" in market_type)
             vol_passed = True if is_index_or_fx else (rvol >= 1.4)
             trend_passed = c_close >= ema20
@@ -163,7 +207,7 @@ def execute_institutional_scan(tickers, market_type, risk_amount):
             else:
                 sl = round(c_close - (1.1 * atr), 2 if "=" not in ticker else 4)
                 tp = round(c_close + (1.65 * atr), 2 if "=" not in ticker else 4)
-                curr_sym = "₹" if ".NS" in ticker else ("$" if market_type in ["US Momentum Tech", "Crypto (24x7)"] else "")
+                curr_sym = "₹" if ".NS" in ticker else ("$" if market_type in ["US Tech Giants (Nasdaq Leaders)", "Crypto (24x7)"] else "")
 
                 if bullish_breakout:
                     signal = "🟢 STRONG BUY"
@@ -199,7 +243,7 @@ def execute_institutional_scan(tickers, market_type, risk_amount):
         df = df.sort_values(by=["Priority"]).drop(columns=["Priority"])
     return df
 
-with st.spinner("Analyzing institutional price action & volatility..."):
+with st.spinner("Analyzing institutional price action & volume across all assets..."):
     df_terminal = execute_institutional_scan(selected_tickers, market_choice, risk_budget)
 
 if not df_terminal.empty:
@@ -212,15 +256,15 @@ if not df_terminal.empty:
             </audio>
         """, unsafe_allow_html=True)
 
-    # Top Analytics Cards
+    # Top Metric Bar
     stat1, stat2, stat3 = st.columns(3)
     stat1.metric("Universe Tracked", len(df_terminal))
-    stat2.metric("Institutional Breakouts", actionable_count, delta="Execution Ready" if actionable_count > 0 else "Neutral")
-    stat3.metric("Segment", market_choice)
+    stat2.metric("Active Breakouts", actionable_count, delta="Execution Ready" if actionable_count > 0 else "Neutral")
+    stat3.metric("Selected Segment", market_choice)
 
     # Clean Table Render
     display_table = df_terminal.drop(columns=["Ticker_Raw", "Is_Actionable"])
-    st.dataframe(display_table, use_container_width=True, height=360)
+    st.dataframe(display_table, use_container_width=True, height=380)
 
     # -------------------------------------------------------------
     # EMBEDDED INTERACTIVE CANDLESTICK CHART DESK
@@ -234,8 +278,7 @@ if not df_terminal.empty:
         selected_asset = st.selectbox("Inspect Asset Candles:", asset_names)
         raw_ticker = df_terminal.loc[df_terminal["Asset"] == selected_asset, "Ticker_Raw"].iloc[0]
 
-        # Quick stats for inspect box
-        st.info(f"Viewing real-time multi-session chart for **{selected_asset}** with 20 EMA, 50 EMA and RSI Momentum sub-panel.")
+        st.info(f"Viewing real-time chart for **{selected_asset}** with 20 EMA, 50 EMA and RSI Momentum indicator.")
 
     with chart_col2:
         try:
@@ -261,13 +304,13 @@ if not df_terminal.empty:
             fig.add_trace(go.Scatter(
                 x=candle_df.index, y=candle_df['EMA20'],
                 line=dict(color='#00e5ff', width=1.5),
-                name="20 EMA (Execution)"
+                name="20 EMA"
             ), row=1, col=1)
 
             fig.add_trace(go.Scatter(
                 x=candle_df.index, y=candle_df['EMA50'],
                 line=dict(color='#ffab00', width=1.5),
-                name="50 EMA (Trend Anchor)"
+                name="50 EMA"
             ), row=1, col=1)
 
             fig.add_trace(go.Scatter(
@@ -288,7 +331,7 @@ if not df_terminal.empty:
             )
             st.plotly_chart(fig, use_container_width=True)
         except Exception:
-            st.warning("Chart data render failed. Please select another asset.")
+            st.warning("Chart render ho raha hai, thoda intezar karein.")
 else:
     st.info("Market data syncing. Please wait a moment.")
 
