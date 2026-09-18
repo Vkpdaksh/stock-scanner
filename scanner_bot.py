@@ -27,6 +27,7 @@ ACTIVE_TRADES_FILE = "active_trades.json"
 DAILY_STATS_FILE = "daily_stats.json"
 PAPER_TRADES_FILE = "paper_trades.json"
 CONFIG_FILE = "system_mode.json"
+EOD_REPORT_FILE = "eod_report_status.json"
 
 DEFAULT_RISK_PER_TRADE = 100        # Standard INR risk per trade (₹100 default)
 DAILY_MAX_LOSS_LIMIT = 500          # Conservative Sniper loss cap (5 losses)
@@ -179,6 +180,46 @@ def send_telegram(text_msg, buttons_data=None, chart_img_path=None):
         except Exception: pass
 
 # -------------------------------------------------------------
+# DAILY EOD PERFORMANCE REPORT CARD
+# -------------------------------------------------------------
+def dispatch_daily_eod_report(paper_book, daily_stats, ist_now):
+    # Sends strictly once per day after 03:40 PM IST
+    if not (ist_now.hour > 15 or (ist_now.hour == 15 and ist_now.minute >= 40)):
+        return
+
+    today_str = ist_now.strftime("%Y-%m-%d")
+    report_status = load_json(EOD_REPORT_FILE, {"last_sent": ""})
+    if report_status.get("last_sent") == today_str:
+        return
+
+    trades_today = [t for t in paper_book.get("trades", []) if t.get("date", "").startswith(today_str)]
+    tp_hits = len([t for t in trades_today if "TP" in t.get("status", "")])
+    sl_hits = len([t for t in trades_today if t.get("status") == "SL"])
+    total_trades = len(trades_today)
+    win_rate = round((tp_hits / total_trades * 100), 1) if total_trades > 0 else 0.0
+    day_pnl = sum([t.get("pnl", 0) for t in trades_today])
+
+    pnl_symbol = "🟢 +" if day_pnl >= 0 else "🔴 "
+    terminal_link = "https://vkpdaksh-stock-scanner-app-ffa8vt.streamlit.app"
+    buttons = [[{"text": "⚡ View Terminal Ledger", "url": terminal_link}]]
+
+    eod_msg = (
+        f"📊 *DAILY EOD TRADING PERFORMANCE REPORT*\n"
+        f"📅 *Date:* `{today_str}` | 🕒 *Time:* `03:40 PM IST`\n\n"
+        f"🔢 *Total Alerts Triggered:* {total_trades}\n"
+        f"🎯 *Target Hits (1:1 / 1:2):* {tp_hits} ✅\n"
+        f"🛑 *Stop-Loss Hits:* {sl_hits} ❌\n"
+        f"📈 *Daily Win-Rate:* **{win_rate}%**\n\n"
+        f"💵 *Today's Paper P&L:* **{pnl_symbol}₹{abs(day_pnl)}**\n"
+        f"💼 *Current Portfolio Fund:* ₹{paper_book.get('balance', 10000):,}\n\n"
+        f"💡 *Discipline Verdict:* {'Flawless Risk Management!' if sl_hits <= 1 else 'Review Execution Rules for Tomorrow.'}"
+    )
+
+    send_telegram(eod_msg, buttons_data=buttons)
+    save_json(EOD_REPORT_FILE, {"last_sent": today_str})
+    print(f"[{ist_now.strftime('%H:%M IST')}] Daily EOD Report successfully sent to Telegram.")
+
+# -------------------------------------------------------------
 # ACTIVE TRADES MONITORING & PAPER TRADING TRACKER
 # -------------------------------------------------------------
 def monitor_active_trades(active_trades, daily_stats, paper_book, today_str):
@@ -212,7 +253,7 @@ def monitor_active_trades(active_trades, daily_stats, paper_book, today_str):
             display_name = info.get("display_name", ticker)
 
             if curr_low <= sl_price:
-                msg = f"🛑 *STOP-LOSS HIT:* {display_name} hit SL ({currency}{sl_price}). Loss of -₹{DEFAULT_RISK_PER_TRADE} booked."
+                msg = f"🛑 *STOP-LOSS HIT:* {display_name} hit SL ({currency}{sl_price}). Loss of -₹{DEFAULT_RISK_PER_TRADE} recorded."
                 send_telegram(msg)
                 paper_book["trades"].append({"date": today_str, "asset": display_name, "pnl": -DEFAULT_RISK_PER_TRADE, "status": "SL"})
                 paper_book["balance"] -= DEFAULT_RISK_PER_TRADE
@@ -221,7 +262,7 @@ def monitor_active_trades(active_trades, daily_stats, paper_book, today_str):
             elif curr_high >= tp1_price and not info.get("tp1_hit", False):
                 st_trail = calculate_supertrend(df)
                 trail_level = max(entry_price, round(st_trail, 2))
-                msg = f"🎯 *TARGET 1 (1:1 RRR) HIT:* {display_name}! Book 50% profit (+₹{int(DEFAULT_RISK_PER_TRADE * 0.5)}). Trail SL to cost ({currency}{trail_level})."
+                msg = f"🎯 *TARGET 1 (1:1 RRR) HIT:* {display_name}! Book 50% (+₹{int(DEFAULT_RISK_PER_TRADE * 0.5)}). Trail SL to cost ({currency}{trail_level})."
                 send_telegram(msg)
                 info["tp1_hit"] = True
                 info["sl"] = trail_level
@@ -249,7 +290,7 @@ def run_dynamic_scan(sent_cache, active_trades, daily_stats, paper_book, system_
     is_beginner = (system_config.get("mode") == "Beginner (Safe)")
     max_trades = 3 if is_beginner else 999
 
-    trades_today = len([t for t in paper_book.get("trades", []) if t.get("date") == today_str])
+    trades_today = len([t for t in paper_book.get("trades", []) if t.get("date", "").startswith(today_str)])
     if trades_today >= max_trades:
         print(f"Daily trade limit reached ({trades_today}/{max_trades}). Skipping scan.")
         return
@@ -358,8 +399,12 @@ if __name__ == "__main__":
     daily_stats = load_json(DAILY_STATS_FILE, {})
     paper_book = load_json(PAPER_TRADES_FILE, {"balance": 10000, "trades": []})
 
+    # Active positions & scanner
     active_trades = monitor_active_trades(active_trades, daily_stats, paper_book, today_str)
     run_dynamic_scan(sent_cache, active_trades, daily_stats, paper_book, system_config, ist_now)
+
+    # Dispatch EOD report if market session closed
+    dispatch_daily_eod_report(paper_book, daily_stats, ist_now)
 
     save_json(CACHE_FILE, {"date": today_str, "tickers": list(sent_cache)})
     save_json(ACTIVE_TRADES_FILE, active_trades)
