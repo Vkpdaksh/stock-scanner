@@ -1,5 +1,9 @@
 streamlit
-yfinance
 pandas
+numpy
+yfinance
 ta
-plotly
+pyotp
+smartapi-python
+requests
+matplotlib
