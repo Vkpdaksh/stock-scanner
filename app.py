@@ -8,88 +8,13 @@ import ta
 from datetime import datetime, timezone, timedelta
 
 # -------------------------------------------------------------
-# 1. PAGE SETUP & INSTITUTIONAL DARK HEDGE-FUND UI THEME
+# 1. PAGE SETUP (DEFAULT STREAMLIT THEME PRESERVED)
 # -------------------------------------------------------------
 st.set_page_config(
-    page_title="Terminal Pro | Institutional Desk",
-    page_icon="⚡",
+    page_title="Institutional Trading Terminal",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
-
-# Custom CSS for Bloomberg / TradingView Glassmorphism Style
-st.markdown("""
-<style>
-    /* Global App Styling */
-    .stApp {
-        background-color: #0B0E14 !important;
-        color: #D1D4DC !important;
-        font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    }
-
-    /* Hide Streamlit Native Chrome */
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    header {visibility: hidden;}
-
-    /* Top Strip Header */
-    .top-strip {
-        background: linear-gradient(90deg, #131722 0%, #1E222D 100%);
-        border: 1px solid #2A2E39;
-        border-radius: 8px;
-        padding: 10px 18px;
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 15px;
-    }
-
-    /* Metric Cards */
-    [data-testid="stMetric"] {
-        background: linear-gradient(135deg, #151A24 0%, #1C2331 100%) !important;
-        border: 1px solid #2B3548 !important;
-        border-radius: 8px !important;
-        padding: 12px 16px !important;
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
-    }
-    [data-testid="stMetricValue"] {
-        color: #FFFFFF !important;
-        font-weight: 700 !important;
-        font-size: 24px !important;
-    }
-    [data-testid="stMetricLabel"] {
-        color: #787B86 !important;
-        font-weight: 600 !important;
-        font-size: 11px !important;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-    }
-
-    /* Dataframe Header Tweaks */
-    thead tr th {
-        background-color: #131722 !important;
-        color: #848E9C !important;
-        font-size: 11px !important;
-        text-transform: uppercase;
-        letter-spacing: 0.6px;
-    }
-
-    /* Buttons */
-    .stButton>button {
-        background: linear-gradient(135deg, #2962FF 0%, #1E53E5 100%) !important;
-        color: #FFFFFF !important;
-        font-weight: 600 !important;
-        border: none !important;
-        border-radius: 6px !important;
-        padding: 8px 18px !important;
-        transition: all 0.2s ease-in-out;
-    }
-    .stButton>button:hover {
-        background: linear-gradient(135deg, #1E53E5 0%, #1545C7 100%) !important;
-        box-shadow: 0 0 10px rgba(41, 98, 255, 0.5) !important;
-    }
-</style>
-""", unsafe_allow_html=True)
 
 # -------------------------------------------------------------
 # 2. SMARTAPI SESSION INITIALIZER
@@ -208,29 +133,21 @@ def calculate_vwap(df):
     return (typical_price * vol).cumsum() / vol.cumsum()
 
 # -------------------------------------------------------------
-# 4. TOP INSTITUTIONAL STATUS BAR
+# 4. TOP HEADER (DEFAULT CLEAN LOOK)
 # -------------------------------------------------------------
+st.title("⚡ Institutional Grade Trading Terminal")
+
 ist_now = get_ist_now()
 time_str = ist_now.strftime("%I:%M:%S %p IST")
 
-# Session Status
 is_nse_open = (ist_now.weekday() < 5) and (
     (ist_now.hour == 9 and ist_now.minute >= 15) or 
     (10 <= ist_now.hour < 15) or 
     (ist_now.hour == 15 and ist_now.minute <= 30)
 )
-session_badge = "<span style='color: #00E676;'>● NSE OPEN</span>" if is_nse_open else "<span style='color: #FF5252;'>● NSE CLOSED</span>"
+session_text = "🟢 NSE SESSION OPEN" if is_nse_open else "🔴 NSE SESSION CLOSED"
 
-st.markdown(f"""
-<div class="top-strip">
-    <div style="font-size: 16px; font-weight: 700; color: #FFFFFF; letter-spacing: 0.5px;">
-        🏛️ INSTITUTIONAL TRADING TERMINAL <span style="font-size: 11px; background-color: #2962FF; color: white; padding: 2px 6px; border-radius: 4px; margin-left: 6px;">PRO V3</span>
-    </div>
-    <div style="font-size: 13px; color: #B2B5BE;">
-        {session_badge} &nbsp;|&nbsp; 🟢 LIVE FEED: <span style="color: #FFFFFF; font-weight: bold;">{time_str}</span>
-    </div>
-</div>
-""", unsafe_allow_html=True)
+st.caption(f"Status: **{session_text}** | Live Feed: **{time_str}**")
 
 # -------------------------------------------------------------
 # 5. CONTROL BAR & PARAMETERS
@@ -239,14 +156,14 @@ col1, col2, col3 = st.columns([2, 1.5, 1])
 
 with col1:
     selected_universe = st.selectbox(
-        "ACTIVE ASSET UNIVERSE:",
+        "Active Asset Universe:",
         list(MARKET_UNIVERSES.keys()),
         index=0
     )
 
 with col2:
     risk_per_trade = st.number_input(
-        "MAX RISK POSITION (₹ / $):",
+        "Max Risk Per Position (₹ / $):",
         min_value=100,
         max_value=50000,
         value=1500,
@@ -257,9 +174,9 @@ with col3:
     auto_sync = st.checkbox("Auto-Sync (60s) 🔄", value=True)
 
 # -------------------------------------------------------------
-# 6. SECTORAL MOMENTUM HEATMAP
+# 6. SECTOR MOMENTUM HEATMAP
 # -------------------------------------------------------------
-with st.expander("📊 LIVE SECTOR MOMENTUM HEATMAP (NSE)", expanded=True):
+with st.expander("📊 Live Sectoral Momentum Heatmap (NSE)", expanded=True):
     try:
         sector_tickers = list(SECTOR_INDICES.values())
         sec_data = yf.download(sector_tickers, period="2d", interval="15m", group_by='ticker', progress=False)
@@ -271,16 +188,8 @@ with st.expander("📊 LIVE SECTOR MOMENTUM HEATMAP (NSE)", expanded=True):
                 curr = float(s_df['Close'].iloc[-1])
                 prev = float(s_df['Close'].iloc[0])
                 pct = ((curr - prev) / prev) * 100
-                bg = "#0A3B24" if pct > 0.4 else ("#11291F" if pct > 0 else ("#4A121A" if pct < -0.4 else "#2A1418"))
-                txt_c = "#00E676" if pct >= 0 else "#FF5252"
-                
                 with sec_cols[idx]:
-                    st.markdown(f"""
-                        <div style="background-color: {bg}; border: 1px solid {txt_c}40; border-radius: 6px; padding: 6px; text-align: center;">
-                            <div style="font-size: 10px; color: #9E9E9E; font-weight: 600;">{sec_name.replace('NIFTY ', '')}</div>
-                            <div style="font-size: 13px; font-weight: 700; color: {txt_c};">{pct:+.2f}%</div>
-                        </div>
-                    """, unsafe_allow_html=True)
+                    st.metric(label=sec_name.replace("NIFTY ", ""), value=f"{curr:.1f}", delta=f"{pct:+.2f}%")
             except Exception:
                 pass
     except Exception:
@@ -390,6 +299,7 @@ if raw_data is not None:
                 "Target 2 (1:2)": round(target_2, decimals),
                 "RVol": rvol_display,
                 "RSI": round(rsi, 1),
+                "Recommended Size": f"{rec_size} Units",
                 "Size": rec_size
             })
         except Exception:
@@ -400,105 +310,76 @@ if raw_data is not None:
 # -------------------------------------------------------------
 m1, m2, m3, m4 = st.columns(4)
 with m1:
-    st.metric("UNIVERSE TRACKED", len(tickers))
+    st.metric("Universe Tracked", len(tickers))
 with m2:
-    st.metric("ACTIVE SIGNALS", active_breakouts)
+    st.metric("Active Breakouts", active_breakouts)
 with m3:
-    st.metric("RISK BUDGET", f"₹{risk_per_trade}")
+    st.metric("Risk Budget", f"₹{risk_per_trade}")
 with m4:
-    st.metric("SYSTEM MODE", "SNIPER READY" if active_breakouts > 0 else "SCANNING")
+    st.metric("Selected Universe", selected_universe)
 
-st.write("")
+st.markdown("---")
 
 # -------------------------------------------------------------
-# 9. COLOR-CODED PRO DATA TABLE (PANDAS STYLER)
+# 9. MONITORING DATA TABLE (DEFAULT CLEAN VIEW)
 # -------------------------------------------------------------
-def style_signal(val):
-    if 'BUY' in str(val):
-        return 'background-color: #064E3B; color: #34D399; font-weight: 700;'
-    elif 'SELL' in str(val):
-        return 'background-color: #7F1D1D; color: #F87171; font-weight: 700;'
-    return 'color: #94A3B8;'
-
-def style_grade(val):
-    if 'Grade A+' in str(val):
-        return 'background-color: #312E81; color: #A5B4FC; font-weight: 700; border: 1px solid #6366F1;'
-    elif 'Grade A' in str(val):
-        return 'color: #38BDF8; font-weight: 600;'
-    return 'color: #64748B;'
-
 if records:
     df_raw = pd.DataFrame(records)
     table_view = df_raw.drop(columns=["Ticker", "Size"])
-
-    styled_table = (
-        table_view.style
-        .map(style_signal, subset=['Signal'])
-        .map(style_grade, subset=['Setup Grade'])
-        .format({
-            "LTP": "{:.2f}",
-            "Stop Loss": "{:.2f}",
-            "Target 1 (1:1)": "{:.2f}",
-            "Target 2 (1:2)": "{:.2f}",
-            "RSI": "{:.1f}"
-        })
-    )
-
     st.dataframe(
-        styled_table,
+        table_view,
         use_container_width=True,
         hide_index=True
     )
 else:
-    st.info("Searching for institutional footprints across feed...")
+    st.info("No active market data fetched for this universe.")
 
 # -------------------------------------------------------------
 # 10. 1-CLICK SMARTAPI ORDER EXECUTION CONSOLE
 # -------------------------------------------------------------
 st.markdown("### ⚡ 1-Click SmartAPI Order Desk")
-with st.container():
-    ord1, ord2, ord3, ord4 = st.columns([2, 1.2, 1.2, 1.5])
-    asset_names = [r["Asset"] for r in records] if records else []
-    
-    with ord1:
-        chosen_asset = st.selectbox("Contract to Execute:", asset_names if asset_names else ["None"])
-    
-    selected_item = next((r for r in records if r["Asset"] == chosen_asset), None)
+ord1, ord2, ord3, ord4 = st.columns([2, 1.2, 1.2, 1.5])
+asset_names = [r["Asset"] for r in records] if records else []
 
-    with ord2:
-        side = st.selectbox("Direction:", ["BUY", "SELL"])
+with ord1:
+    chosen_asset = st.selectbox("Contract to Execute:", asset_names if asset_names else ["None"])
 
-    with ord3:
-        suggested_qty = selected_item["Size"] if selected_item else 1
-        qty_input = st.number_input("Lots/Units:", min_value=1, value=max(1, suggested_qty), step=1)
+selected_item = next((r for r in records if r["Asset"] == chosen_asset), None)
 
-    with ord4:
-        st.write("")
-        st.write("")
-        if st.button("🚀 FIRE TO ANGEL ONE", use_container_width=True):
-            if not selected_item:
-                st.warning("Select contract first.")
+with ord2:
+    side = st.selectbox("Direction:", ["BUY", "SELL"])
+
+with ord3:
+    suggested_qty = selected_item["Size"] if selected_item else 1
+    qty_input = st.number_input("Execution Quantity:", min_value=1, value=max(1, suggested_qty), step=1)
+
+with ord4:
+    st.write("")
+    st.write("")
+    if st.button("🚀 Fire Order in Angel One", use_container_width=True):
+        if not selected_item:
+            st.warning("Select contract first.")
+        else:
+            raw_sym = selected_item["Ticker"]
+            exch = "NSE" if ".NS" in raw_sym or "^NSE" in raw_sym else "MCX"
+            clean_sym = raw_sym.replace(".NS", "").replace("^", "")
+            
+            ok, msg = place_order_smartapi(
+                symbol_token=clean_sym,
+                trading_symbol=clean_sym,
+                exchange=exch,
+                qty=qty_input,
+                transaction_type=side
+            )
+            if ok:
+                st.success(msg)
             else:
-                raw_sym = selected_item["Ticker"]
-                exch = "NSE" if ".NS" in raw_sym or "^NSE" in raw_sym else "MCX"
-                clean_sym = raw_sym.replace(".NS", "").replace("^", "")
-                
-                ok, msg = place_order_smartapi(
-                    symbol_token=clean_sym,
-                    trading_symbol=clean_sym,
-                    exchange=exch,
-                    qty=qty_input,
-                    transaction_type=side
-                )
-                if ok:
-                    st.success(msg)
-                else:
-                    st.error(f"Failed: {msg}")
+                st.error(f"Execution failed: {msg}")
 
 # -------------------------------------------------------------
-# 11. EMBEDDED ADVANCED TRADINGVIEW CHART WIDGET
+# 11. INTERACTIVE TRADINGVIEW CANDLESTICK CHART
 # -------------------------------------------------------------
-st.markdown("### 📈 Interactive TradingView Candlestick Terminal")
+st.markdown("### 📈 Interactive TradingView Live Chart")
 if records and selected_item:
     sym = selected_item["Ticker"].replace(".NS", "").replace("-USD", "").replace("=F", "").replace("=X", "")
     if sym == "^NSEI":
@@ -507,8 +388,8 @@ if records and selected_item:
         sym = "BANKNIFTY"
 
     tv_code = f"""
-    <div class="tradingview-widget-container" style="height:540px; width:100%;">
-      <div id="tradingview_chart" style="height:540px;"></div>
+    <div class="tradingview-widget-container" style="height:550px; width:100%;">
+      <div id="tradingview_chart" style="height:550px;"></div>
       <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
       <script type="text/javascript">
       new TradingView.widget(
@@ -530,4 +411,4 @@ if records and selected_item:
       </script>
     </div>
     """
-    components.html(tv_code, height=550)
+    components.html(tv_code, height=560)
