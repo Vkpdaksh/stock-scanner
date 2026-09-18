@@ -2,7 +2,8 @@ name: Market Background Scanner
 
 on:
   schedule:
-    - cron: '*/30 3-18 * * 1-5'
+    # 3:00 UTC to 17:30 UTC = Subah 8:30 AM IST se Raat 11:00 PM IST (Mon-Fri)
+    - cron: '*/30 3-17 * * 1-5'
   workflow_dispatch:
 
 jobs:
