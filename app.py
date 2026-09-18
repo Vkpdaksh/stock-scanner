@@ -36,7 +36,7 @@ def save_json(filepath, data):
     except Exception:
         pass
 
-# Load or initialize persistent configs
+# Initialize configs with ₹10,000 capital default
 system_config = load_json(CONFIG_FILE, {"mode": "Beginner (Safe)", "execution": "Paper Trading"})
 paper_data = load_json(PAPER_TRADES_FILE, {"balance": 10000, "trades": []})
 
@@ -199,33 +199,72 @@ with col_risk:
         "Risk Per Position (₹ / $):",
         min_value=50,
         max_value=50000,
-        value=100 if is_beginner else 100,
+        value=100,
         step=50
     )
+
+# Capital Risk Warning Badge
+current_balance = paper_data.get("balance", 10000)
+risk_pct = (risk_per_trade / current_balance) * 100 if current_balance > 0 else 0
+
+if risk_pct > 2.0:
+    st.warning(f"⚠️ **High Risk Alert:** Selected risk is **{risk_pct:.1f}%** of your capital! Beginners should strictly keep risk at **1% - 2% (₹100 - ₹200)**.")
+else:
+    st.success(f"✅ **Safe Risk Discipline:** Position risk is **{risk_pct:.1f}%** (Within the safe 1-2% bracket).")
 
 if system_config.get("mode") != selected_mode or system_config.get("execution") != execution_type:
     system_config["mode"] = selected_mode
     system_config["execution"] = execution_type
     save_json(CONFIG_FILE, system_config)
 
-st.caption(f"Status: **{session_text}** | Live Feed: **{time_str}** | Profile: **{selected_mode}** | Mode: **{'Max 3 Trades/Day (Safe)' if is_beginner else 'Unlimited Flow'}**")
+st.caption(f"Status: **{session_text}** | Live Feed: **{time_str}** | Profile: **{selected_mode}** | Daily Cap: **{'Max 3 Trades/Day (Safe)' if is_beginner else 'Unlimited Flow'}**")
 
 # -------------------------------------------------------------
-# 5. VIRTUAL PAPER TRADING PORTFOLIO (1 LAKH CAPITAL)
+# 5. VIRTUAL PAPER TRADING PORTFOLIO & RESET ENGINE
 # -------------------------------------------------------------
-st.markdown("### 💼 Virtual Paper Trading Portfolio (₹1,00,000 Learning Fund)")
-total_pnl = paper_data.get("balance", 10000) - 10000
-trades_count = len(paper_data.get("trades", []))
+st.markdown("### 💼 Virtual Paper Trading Portfolio (₹10,000 Capital Desk)")
+total_pnl = current_balance - 10000
+all_trades = paper_data.get("trades", [])
+open_trades = [t for t in all_trades if t.get("status") == "OPEN"]
+closed_trades = [t for t in all_trades if t.get("status") != "OPEN"]
 
-p1, p2, p3 = st.columns(3)
+p1, p2, p3, p4 = st.columns([1.5, 1.5, 1.5, 1])
 with p1:
-    st.metric("Virtual Cash Balance", f"₹{paper_data.get('balance', 100000):,}")
+    st.metric("Virtual Cash Balance", f"₹{current_balance:,}")
 with p2:
     st.metric("Total Paper P&L", f"₹{total_pnl:+,}", delta=f"₹{total_pnl:+,}")
 with p3:
-    st.metric("Simulated Trades Placed", trades_count)
+    st.metric("Open / Closed Trades", f"{len(open_trades)} Open | {len(closed_trades)} Closed")
+with p4:
+    st.write("")
+    if st.button("🔄 Reset to ₹10k", help="Click to reset paper balance to ₹10,000 and clear trade log"):
+        paper_data = {"balance": 10000, "trades": []}
+        save_json(PAPER_TRADES_FILE, paper_data)
+        st.success("Balance reset to ₹10,000!")
+        st.rerun()
 
-st.write("")
+# -------------------------------------------------------------
+# 5B. ACTIVE POSITIONS WITH SQUARE-OFF BUTTONS
+# -------------------------------------------------------------
+if open_trades:
+    st.markdown("#### ⚡ Active Open Positions")
+    for idx, trade in enumerate(open_trades):
+        t_col1, t_col2, t_col3, t_col4, t_col5 = st.columns([2, 1.5, 2, 1.5, 1.2])
+        with t_col1:
+            st.write(f"**{trade.get('asset')}** ({trade.get('type')})")
+        with t_col2:
+            st.caption(f"Entry: ₹{trade.get('entry')} | Qty: {trade.get('qty')}")
+        with t_col3:
+            st.caption(f"SL: ₹{trade.get('sl')} | TP1: ₹{trade.get('tp1')}")
+        with t_col4:
+            st.info("Status: Live Monitoring")
+        with t_col5:
+            if st.button(f"🔴 Exit", key=f"sq_off_{idx}"):
+                trade["status"] = "MANUAL_EXIT"
+                trade["exit_time"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+                save_json(PAPER_TRADES_FILE, paper_data)
+                st.success(f"Closed {trade.get('asset')} position!")
+                st.rerun()
 
 # -------------------------------------------------------------
 # 6. SECTOR MOMENTUM HEATMAP (COLORED CARDS)
@@ -439,7 +478,7 @@ with ord_col4:
     st.write("")
     st.write("")
     
-    # 1. AGAR BEGINNER YA PAPER TRADING CHUNA HAI:
+    # 1. BEGINNER / PAPER TRADING:
     if is_beginner or execution_type == "Paper Trading":
         if st.button("📥 Record Virtual Paper Trade", use_container_width=True):
             if selected_item:
@@ -461,7 +500,7 @@ with ord_col4:
             else:
                 st.warning("Asset select karein.")
 
-    # 2. AGAR PRO AUR REAL FUND (SMARTAPI) CHUNA HAI:
+    # 2. PRO REAL FUND SMARTAPI:
     else:
         if st.button("🚀 Fire to Angel One (Real Fund)", use_container_width=True):
             if selected_item:
@@ -484,7 +523,15 @@ with ord_col4:
                 st.warning("Asset select karein.")
 
 # -------------------------------------------------------------
-# 11. INTERACTIVE TRADINGVIEW CANDLESTICK CHART
+# 11. COMPLETED PAPER TRADE HISTORY LEDGER
+# -------------------------------------------------------------
+if closed_trades:
+    with st.expander("📜 Completed Paper Trades Ledger", expanded=False):
+        history_df = pd.DataFrame(closed_trades)
+        st.dataframe(history_df, use_container_width=True, hide_index=True)
+
+# -------------------------------------------------------------
+# 12. INTERACTIVE TRADINGVIEW CANDLESTICK CHART
 # -------------------------------------------------------------
 st.markdown("### 📈 Interactive TradingView Live Chart")
 if records and selected_item:
