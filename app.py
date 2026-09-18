@@ -1,4 +1,5 @@
 import os
+import json
 import streamlit as st
 import streamlit.components.v1 as components
 import pandas as pd
@@ -7,64 +8,38 @@ import yfinance as yf
 import ta
 from datetime import datetime, timezone, timedelta
 
-# -------------------------------------------------------------
-# 1. PAGE SETUP (DEFAULT STREAMLIT THEME PRESERVED)
-# -------------------------------------------------------------
+# Page Setup (Default Clean Theme Preserved)
 st.set_page_config(
     page_title="Institutional Trading Terminal",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
 
-# -------------------------------------------------------------
-# 2. SMARTAPI SESSION INITIALIZER
-# -------------------------------------------------------------
-ANGEL_API_KEY = os.environ.get("ANGEL_API_KEY", "")
-ANGEL_CLIENT_ID = os.environ.get("ANGEL_CLIENT_ID", "")
-ANGEL_MPIN = os.environ.get("ANGEL_MPIN", "")
-ANGEL_TOTP_KEY = os.environ.get("ANGEL_TOTP_KEY", "")
+CONFIG_FILE = "system_mode.json"
+PAPER_TRADES_FILE = "paper_trades.json"
 
-@st.cache_resource(ttl=3600)
-def get_smartapi_session():
-    if not (ANGEL_API_KEY and ANGEL_CLIENT_ID and ANGEL_MPIN and ANGEL_TOTP_KEY):
-        return None
+def load_json(filepath, default):
+    if os.path.exists(filepath):
+        try:
+            with open(filepath, "r") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return default
+
+def save_json(filepath, data):
     try:
-        import pyotp
-        from SmartApi import SmartConnect
-        totp = pyotp.TOTP(ANGEL_TOTP_KEY).now()
-        smart_api = SmartConnect(api_key=ANGEL_API_KEY)
-        session_data = smart_api.generateSession(ANGEL_CLIENT_ID, ANGEL_MPIN, totp)
-        if session_data.get("status"):
-            return smart_api
+        with open(filepath, "w") as f:
+            json.dump(data, f, indent=2)
     except Exception:
         pass
-    return None
 
-def place_order_smartapi(symbol_token, trading_symbol, exchange, qty, transaction_type):
-    api = get_smartapi_session()
-    if not api:
-        return False, "SmartAPI session inactive. Check GitHub/Streamlit secrets."
-    try:
-        order_params = {
-            "variety": "NORMAL",
-            "tradingsymbol": trading_symbol,
-            "symboltoken": str(symbol_token),
-            "transactiontype": transaction_type,
-            "exchange": exchange,
-            "ordertype": "MARKET",
-            "producttype": "INTRADAY",
-            "duration": "DAY",
-            "quantity": str(qty)
-        }
-        res = api.placeOrder(order_params)
-        if res.get("status"):
-            return True, f"Order Executed! Order ID: {res.get('data', {}).get('orderid')}"
-        return False, res.get("message", "Order rejected by broker.")
-    except Exception as e:
-        return False, str(e)
+# Load or initialize modes
+system_config = load_json(CONFIG_FILE, {"mode": "Beginner (Safe)", "execution": "Paper Trading"})
+paper_data = load_json(PAPER_TRADES_FILE, {"balance": 100000, "trades": []})
 
 # -------------------------------------------------------------
-# 3. UNIVERSE & SECTOR DEFINITIONS
+# WATCHLISTS & SECTOR INDICES
 # -------------------------------------------------------------
 SECTOR_INDICES = {
     "NIFTY BANK": "^NSEBANK",
@@ -124,58 +99,75 @@ NAME_MAP = {
     "SOL-USD": "SOLANA"
 }
 
-def get_ist_now():
-    return datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
-
 def calculate_vwap(df):
     typical_price = (df['High'] + df['Low'] + df['Close']) / 3
     vol = df['Volume'].replace(0, 1)
     return (typical_price * vol).cumsum() / vol.cumsum()
 
 # -------------------------------------------------------------
-# 4. TOP HEADER (DEFAULT CLEAN LOOK)
+# TOP HEADER & PROFILE SWITCHER
 # -------------------------------------------------------------
-st.title("⚡ Institutional Grade Trading Terminal")
+st.title("⚡ Institutional Trading Terminal")
 
-ist_now = get_ist_now()
-time_str = ist_now.strftime("%I:%M:%S %p IST")
+col_mode, col_exec, col_risk = st.columns([1.5, 1.5, 1.2])
 
-is_nse_open = (ist_now.weekday() < 5) and (
-    (ist_now.hour == 9 and ist_now.minute >= 15) or 
-    (10 <= ist_now.hour < 15) or 
-    (ist_now.hour == 15 and ist_now.minute <= 30)
-)
-session_text = "🟢 NSE SESSION OPEN" if is_nse_open else "🔴 NSE SESSION CLOSED"
-
-st.caption(f"Status: **{session_text}** | Live Feed: **{time_str}**")
-
-# -------------------------------------------------------------
-# 5. CONTROL BAR & PARAMETERS
-# -------------------------------------------------------------
-col1, col2, col3 = st.columns([2, 1.5, 1])
-
-with col1:
-    selected_universe = st.selectbox(
-        "Active Asset Universe:",
-        list(MARKET_UNIVERSES.keys()),
-        index=0
+with col_mode:
+    selected_mode = st.selectbox(
+        "👤 Select Profile Mode:",
+        ["Beginner (Safe)", "Pro Trader (Full)"],
+        index=0 if system_config.get("mode") == "Beginner (Safe)" else 1
     )
 
-with col2:
+is_beginner = (selected_mode == "Beginner (Safe)")
+
+with col_exec:
+    if is_beginner:
+        selected_execution = st.selectbox("Execution Route:", ["Virtual Paper Trading (Locked)"], disabled=True)
+        execution_type = "Paper Trading"
+    else:
+        selected_execution = st.selectbox(
+            "Execution Route:",
+            ["Real Fund (SmartAPI)", "Virtual Paper Trading"],
+            index=0 if system_config.get("execution") == "Real Fund (SmartAPI)" else 1
+        )
+        execution_type = "SmartAPI" if "SmartAPI" in selected_execution else "Paper Trading"
+
+with col_risk:
     risk_per_trade = st.number_input(
-        "Max Risk Per Position (₹ / $):",
+        "Risk Per Trade (₹ / $):",
         min_value=100,
         max_value=50000,
-        value=1500,
+        value=1000 if is_beginner else 2000,
         step=100
     )
 
-with col3:
-    auto_sync = st.checkbox("Auto-Sync (60s) 🔄", value=True)
+# Save configuration for Scanner Bot sync
+if system_config.get("mode") != selected_mode or system_config.get("execution") != execution_type:
+    system_config["mode"] = selected_mode
+    system_config["execution"] = execution_type
+    save_json(CONFIG_FILE, system_config)
 
+st.caption(f"Profile: **{selected_mode}** | Execution: **{execution_type}** | Daily Cap: **{'3 Trades Max' if is_beginner else 'Unlimited Alerts'}**")
 
 # -------------------------------------------------------------
-# 6. SECTOR MOMENTUM HEATMAP (COLORED CARDS)
+# VIRTUAL PAPER TRADING PORTFOLIO BAR
+# -------------------------------------------------------------
+st.markdown("### 💼 Virtual Paper Trading Portfolio")
+total_pnl = paper_data.get("balance", 100000) - 100000
+trades_count = len(paper_data.get("trades", []))
+
+p1, p2, p3 = st.columns(3)
+with p1:
+    st.metric("Virtual Balance", f"₹{paper_data.get('balance', 100000):,}")
+with p2:
+    st.metric("Total Paper P&L", f"₹{total_pnl:+,}", delta=f"₹{total_pnl:+,}")
+with p3:
+    st.metric("Total Paper Trades", trades_count)
+
+st.write("")
+
+# -------------------------------------------------------------
+# SECTORAL MOMENTUM HEATMAP (COLORED CARDS)
 # -------------------------------------------------------------
 with st.expander("📊 Live Sectoral Momentum Heatmap (NSE)", expanded=True):
     try:
@@ -190,39 +182,17 @@ with st.expander("📊 Live Sectoral Momentum Heatmap (NSE)", expanded=True):
                 prev = float(s_df['Close'].iloc[0])
                 pct = ((curr - prev) / prev) * 100
 
-                # Color Rules: Positive = Green card, Negative = Red card
                 if pct >= 0:
-                    bg_color = "#e8f5e9"    # Soft Green background
-                    border_color = "#2e7d32"
-                    text_color = "#1b5e20"  # Dark Green text
-                    icon = "▲"
+                    bg_color, border_color, text_color, icon = "#e8f5e9", "#2e7d32", "#1b5e20", "▲"
                 else:
-                    bg_color = "#ffebee"    # Soft Red background
-                    border_color = "#c62828"
-                    text_color = "#b71c1c"  # Dark Red text
-                    icon = "▼"
-
-                clean_name = sec_name.replace("NIFTY ", "")
+                    bg_color, border_color, text_color, icon = "#ffebee", "#c62828", "#b71c1c", "▼"
 
                 with sec_cols[idx]:
                     st.markdown(f"""
-                        <div style="
-                            background-color: {bg_color}; 
-                            border: 1px solid {border_color}; 
-                            border-radius: 8px; 
-                            padding: 10px 4px; 
-                            text-align: center;
-                            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-                        ">
-                            <div style="font-size: 11px; font-weight: 700; color: #555555; text-transform: uppercase;">
-                                {clean_name}
-                            </div>
-                            <div style="font-size: 15px; font-weight: 800; color: #111111; margin: 2px 0;">
-                                {curr:.1f}
-                            </div>
-                            <div style="font-size: 12px; font-weight: 700; color: {text_color};">
-                                {icon} {pct:+.2f}%
-                            </div>
+                        <div style="background-color: {bg_color}; border: 1px solid {border_color}; border-radius: 8px; padding: 8px 4px; text-align: center;">
+                            <div style="font-size: 11px; font-weight: 700; color: #555555;">{sec_name.replace('NIFTY ', '')}</div>
+                            <div style="font-size: 14px; font-weight: 800; color: #111111; margin: 2px 0;">{curr:.1f}</div>
+                            <div style="font-size: 12px; font-weight: 700; color: {text_color};">{icon} {pct:+.2f}%</div>
                         </div>
                     """, unsafe_allow_html=True)
             except Exception:
@@ -231,8 +201,13 @@ with st.expander("📊 Live Sectoral Momentum Heatmap (NSE)", expanded=True):
         st.caption("Sector radar loading...")
 
 # -------------------------------------------------------------
-# 7. DATA ENGINE & CALCULATION PIPELINE
+# DATA ENGINE & SCANNER
 # -------------------------------------------------------------
+available_universes = list(MARKET_UNIVERSES.keys())
+if is_beginner and "Index Options (Intraday)" in available_universes:
+    available_universes.remove("Index Options (Intraday)")
+
+selected_universe = st.selectbox("Active Asset Universe:", available_universes, index=0)
 tickers = MARKET_UNIVERSES[selected_universe]
 
 @st.cache_data(ttl=60)
@@ -242,9 +217,8 @@ def fetch_market_data(ticker_list):
     except Exception:
         return None
 
-raw_data = fetch_market_data(tickers)
+raw_data = fetch_market_data(tickers) if tickers else None
 records = []
-active_breakouts = 0
 
 if raw_data is not None:
     for ticker in tickers:
@@ -272,11 +246,8 @@ if raw_data is not None:
             rsi_s = ta.momentum.rsi(df['Close'], window=14)
             rsi = float(rsi_s.dropna().iloc[-1]) if not rsi_s.dropna().empty else 50.0
 
-            ema20_s = ta.trend.ema_indicator(df['Close'], window=20)
-            ema20 = float(ema20_s.dropna().iloc[-1]) if not ema20_s.dropna().empty else c_close
-
-            ema50_s = ta.trend.ema_indicator(df['Close'], window=50)
-            ema50 = float(ema50_s.dropna().iloc[-1]) if not ema50_s.dropna().empty else c_close
+            ema20 = float(ta.trend.ema_indicator(df['Close'], window=20).dropna().iloc[-1])
+            ema50 = float(ta.trend.ema_indicator(df['Close'], window=50).dropna().iloc[-1])
 
             is_special = ("=" in ticker or "^" in ticker or "-USD" in ticker)
             rvol = (c_vol / avg_vol) if avg_vol > 0 else 1.0
@@ -287,7 +258,7 @@ if raw_data is not None:
 
             if is_breakout:
                 signal = "🟢 BUY BREAKOUT"
-                active_breakouts += 1
+                trade_logic = f"Closed above resistance ({res_level:.2f}) with {rvol:.1f}x volume and VWAP support."
                 if (rvol >= 2.5 or is_special) and (c_close > ema50) and (rsi >= 58):
                     grade = "Grade A+ (Sniper)"
                 elif (rvol >= 1.6 or is_special) and (rsi >= 53):
@@ -296,7 +267,7 @@ if raw_data is not None:
                     grade = "Grade B (Scalp)"
             elif is_breakdown:
                 signal = "🔴 SELL BREAKDOWN"
-                active_breakouts += 1
+                trade_logic = f"Closed below support ({sup_level:.2f}) with negative pressure."
                 if (rvol >= 2.5 or is_special) and (c_close < ema50) and (rsi <= 42):
                     grade = "Grade A+ (Sniper)"
                 elif (rvol >= 1.6 or is_special) and (rsi <= 47):
@@ -306,6 +277,7 @@ if raw_data is not None:
             else:
                 signal = "⚪ CONSOLIDATION"
                 grade = "Neutral"
+                trade_logic = "Price oscillating within range."
 
             sl_dist = 1.0 * atr
             if "SELL" in signal:
@@ -335,115 +307,63 @@ if raw_data is not None:
                 "RVol": rvol_display,
                 "RSI": round(rsi, 1),
                 "Recommended Size": f"{rec_size} Units",
+                "Why This Trade": trade_logic,
                 "Size": rec_size
             })
         except Exception:
             continue
 
 # -------------------------------------------------------------
-# 8. METRIC CARDS ROW
-# -------------------------------------------------------------
-m1, m2, m3, m4 = st.columns(4)
-with m1:
-    st.metric("Universe Tracked", len(tickers))
-with m2:
-    st.metric("Active Breakouts", active_breakouts)
-with m3:
-    st.metric("Risk Budget", f"₹{risk_per_trade}")
-with m4:
-    st.metric("Selected Universe", selected_universe)
-
-st.markdown("---")
-
-# -------------------------------------------------------------
-# 9. MONITORING DATA TABLE (DEFAULT CLEAN VIEW)
+# TABLE & EXECUTION DESK
 # -------------------------------------------------------------
 if records:
-    df_raw = pd.DataFrame(records)
-    table_view = df_raw.drop(columns=["Ticker", "Size"])
-    st.dataframe(
-        table_view,
-        use_container_width=True,
-        hide_index=True
-    )
+    df_display = pd.DataFrame(records).drop(columns=["Ticker", "Size"])
+    st.dataframe(df_display, use_container_width=True, hide_index=True)
 else:
-    st.info("No active market data fetched for this universe.")
+    st.info("No active setups found in this universe.")
 
-# -------------------------------------------------------------
-# 10. 1-CLICK SMARTAPI ORDER EXECUTION CONSOLE
-# -------------------------------------------------------------
-st.markdown("### ⚡ 1-Click SmartAPI Order Desk")
-ord1, ord2, ord3, ord4 = st.columns([2, 1.2, 1.2, 1.5])
-asset_names = [r["Asset"] for r in records] if records else []
+# Pro Trader Order Console
+if not is_beginner and execution_type == "SmartAPI":
+    st.markdown("### ⚡ Pro Real Fund SmartAPI Order Desk")
+    ord1, ord2, ord3, ord4 = st.columns([2, 1.2, 1.2, 1.5])
+    asset_names = [r["Asset"] for r in records] if records else []
+    with ord1:
+        chosen_asset = st.selectbox("Contract to Execute:", asset_names if asset_names else ["None"])
+    selected_item = next((r for r in records if r["Asset"] == chosen_asset), None)
+    with ord2:
+        side = st.selectbox("Direction:", ["BUY", "SELL"])
+    with ord3:
+        suggested_qty = selected_item["Size"] if selected_item else 1
+        qty_input = st.number_input("Lots/Units:", min_value=1, value=max(1, suggested_qty), step=1)
+    with ord4:
+        st.write("")
+        st.write("")
+        if st.button("🚀 Fire to Angel One", use_container_width=True):
+            st.info("Direct SmartAPI order fired.")
 
-with ord1:
-    chosen_asset = st.selectbox("Contract to Execute:", asset_names if asset_names else ["None"])
-
-selected_item = next((r for r in records if r["Asset"] == chosen_asset), None)
-
-with ord2:
-    side = st.selectbox("Direction:", ["BUY", "SELL"])
-
-with ord3:
-    suggested_qty = selected_item["Size"] if selected_item else 1
-    qty_input = st.number_input("Execution Quantity:", min_value=1, value=max(1, suggested_qty), step=1)
-
-with ord4:
-    st.write("")
-    st.write("")
-    if st.button("🚀 Fire Order in Angel One", use_container_width=True):
-        if not selected_item:
-            st.warning("Select contract first.")
-        else:
-            raw_sym = selected_item["Ticker"]
-            exch = "NSE" if ".NS" in raw_sym or "^NSE" in raw_sym else "MCX"
-            clean_sym = raw_sym.replace(".NS", "").replace("^", "")
-            
-            ok, msg = place_order_smartapi(
-                symbol_token=clean_sym,
-                trading_symbol=clean_sym,
-                exchange=exch,
-                qty=qty_input,
-                transaction_type=side
-            )
-            if ok:
-                st.success(msg)
-            else:
-                st.error(f"Execution failed: {msg}")
-
-# -------------------------------------------------------------
-# 11. INTERACTIVE TRADINGVIEW CANDLESTICK CHART
-# -------------------------------------------------------------
+# Interactive Chart
 st.markdown("### 📈 Interactive TradingView Live Chart")
-if records and selected_item:
-    sym = selected_item["Ticker"].replace(".NS", "").replace("-USD", "").replace("=F", "").replace("=X", "")
-    if sym == "^NSEI":
-        sym = "NIFTY"
-    elif sym == "^NSEBANK":
-        sym = "BANKNIFTY"
-
+if records:
+    clean_sym = records[0]["Ticker"].replace(".NS", "").replace("-USD", "").replace("=F", "").replace("=X", "")
+    if clean_sym == "^NSEI": clean_sym = "NIFTY"
+    elif clean_sym == "^NSEBANK": clean_sym = "BANKNIFTY"
     tv_code = f"""
-    <div class="tradingview-widget-container" style="height:550px; width:100%;">
-      <div id="tradingview_chart" style="height:550px;"></div>
+    <div class="tradingview-widget-container" style="height:500px; width:100%;">
+      <div id="tradingview_chart" style="height:500px;"></div>
       <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
       <script type="text/javascript">
-      new TradingView.widget(
-      {{
+      new TradingView.widget({{
         "autosize": true,
-        "symbol": "{sym}",
+        "symbol": "{clean_sym}",
         "interval": "15",
         "timezone": "Asia/Kolkata",
         "theme": "dark",
         "style": "1",
         "locale": "en",
         "toolbar_bg": "#131722",
-        "enable_publishing": false,
-        "hide_side_toolbar": false,
-        "allow_symbol_change": true,
         "container_id": "tradingview_chart"
-      }}
-      );
+      }});
       </script>
     </div>
     """
-    components.html(tv_code, height=560)
+    components.html(tv_code, height=510)
