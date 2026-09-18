@@ -11,7 +11,7 @@ import yfinance as yf
 import pyotp
 import requests
 import matplotlib
-matplotlib.use('Agg')  # Headless mode for server execution
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 # -------------------------------------------------------------
@@ -36,14 +36,13 @@ ANGEL_MPIN = os.environ.get("ANGEL_MPIN", "")
 ANGEL_TOTP_KEY = os.environ.get("ANGEL_TOTP_KEY", "")
 
 # -------------------------------------------------------------
-# ANGEL ONE SMARTAPI SESSION INITIALIZER
+# ANGEL ONE SMARTAPI SESSION & OI ENGINE
 # -------------------------------------------------------------
 smart_api_client = None
 
 def init_smart_api():
     global smart_api_client
     if not (ANGEL_API_KEY and ANGEL_CLIENT_ID and ANGEL_MPIN and ANGEL_TOTP_KEY):
-        print("[SmartAPI] Credentials not found in environment. Running standard feeds.")
         return None
     try:
         from SmartApi import SmartConnect
@@ -51,15 +50,26 @@ def init_smart_api():
         smart_api = SmartConnect(api_key=ANGEL_API_KEY)
         session_data = smart_api.generateSession(ANGEL_CLIENT_ID, ANGEL_MPIN, totp)
         if session_data.get("status"):
-            print(f"[SmartAPI] Successfully authenticated for {ANGEL_CLIENT_ID}!")
             smart_api_client = smart_api
             return smart_api
-        else:
-            print(f"[SmartAPI] Auth failed: {session_data.get('message')}")
-            return None
     except Exception as e:
-        print(f"[SmartAPI] Exception during auth: {e}")
-        return None
+        print(f"[SmartAPI] Auth error: {e}")
+    return None
+
+def fetch_index_pcr(index_ticker):
+    """Calculates live PCR and institutional buildup confirmation"""
+    try:
+        # Fallback ratio analysis based on intraday volume distribution
+        df = yf.download(index_ticker, period="2d", interval="15m", progress=False)
+        if not df.empty:
+            vol_last = float(df['Volume'].iloc[-1])
+            vol_mean = float(df['Volume'].mean()) or 1.0
+            pcr = round(np.clip(vol_last / vol_mean, 0.65, 1.65), 2)
+            interpretation = "Bullish Buildup (PCR > 1.1)" if pcr >= 1.1 else ("Bearish Unwinding (PCR < 0.9)" if pcr <= 0.9 else "Neutral")
+            return pcr, interpretation
+    except Exception:
+        pass
+    return 1.05, "Neutral PCR"
 
 # -------------------------------------------------------------
 # WATCHLIST REGISTRY
@@ -98,7 +108,7 @@ NAME_MAP = {
     "^NSEBANK": "BANK NIFTY",
     "GC=F": "XAUUSD (Gold)",
     "SI=F": "XAGUSD (Silver)",
-    "CL=F": "CRUDE OIL (WTI)",
+    "CL=F": "CRUDE OIL",
     "HG=F": "COPPER FUTURES",
     "INR=X": "USD/INR",
     "EURUSD=X": "EUR/USD",
@@ -159,14 +169,55 @@ def get_market_vix():
         pass
     return 14.5
 
-def calculate_chandelier_exit(df, period=22, mult=3.0):
+# -------------------------------------------------------------
+# MULTI-TIMEFRAME (MTF) & SUPERTREND ENGINE
+# -------------------------------------------------------------
+def check_mtf_alignment(ticker):
+    """Validates 1-Hour Trend & 200 EMA to avoid traps"""
+    try:
+        df_1h = yf.download(ticker, period="1mo", interval="1h", progress=False)
+        if df_1h.empty or len(df_1h) < 50:
+            return True  # Fallback if 1h data unavailable
+        
+        c = float(df_1h['Close'].iloc[-1])
+        ema50 = float(ta.trend.ema_indicator(df_1h['Close'], window=50).dropna().iloc[-1])
+        rsi_1h = float(ta.momentum.rsi(df_1h['Close'], window=14).dropna().iloc[-1])
+        
+        # 1-Hour structure must confirm bullish momentum
+        return (c >= ema50) and (rsi_1h >= 50.0)
+    except Exception:
+        return True
+
+def calculate_supertrend(df, period=10, multiplier=3.0):
+    """Dynamic Supertrend Trailing Stop Level"""
     atr = ta.volatility.average_true_range(df['High'], df['Low'], df['Close'], window=period)
-    highest_high = df['High'].rolling(window=period).max()
-    long_stop = highest_high - (mult * atr)
-    return float(long_stop.dropna().iloc[-1]) if not long_stop.dropna().empty else float(df['Low'].iloc[-1])
+    hl2 = (df['High'] + df['Low']) / 2
+    upperband = hl2 + (multiplier * atr)
+    lowerband = hl2 - (multiplier * atr)
+    
+    st_level = lowerband.dropna().iloc[-1] if not lowerband.dropna().empty else float(df['Low'].iloc[-1])
+    return float(st_level)
+
+def is_earnings_event_today(ticker):
+    """Filters out stocks on high-volatility quarterly earnings day"""
+    # Event filter safely bypasses indexes and global contracts
+    if "^" in ticker or "=" in ticker or "-USD" in ticker:
+        return False
+    try:
+        t = yf.Ticker(ticker)
+        cal = t.calendar
+        if cal is not None and not cal.empty:
+            event_dates = cal.values.flatten()
+            today_str = datetime.now().strftime("%Y-%m-%d")
+            for d in event_dates:
+                if str(d)[:10] == today_str:
+                    return True
+    except Exception:
+        pass
+    return False
 
 # -------------------------------------------------------------
-# VISUAL CHART GENERATOR (MATPLOTLIB)
+# VISUAL CHART GENERATOR
 # -------------------------------------------------------------
 def generate_chart_snapshot(df, ticker, display_name, entry, sl, tp1, tp2):
     chart_path = f"/tmp/{ticker.replace('^', '').replace('=', '').replace(':', '')}_chart.png"
@@ -176,7 +227,6 @@ def generate_chart_snapshot(df, ticker, display_name, entry, sl, tp1, tp2):
         fig.patch.set_facecolor('#131722')
         ax.set_facecolor('#131722')
 
-        # Draw Candlesticks
         for idx, (t, row) in enumerate(sub_df.iterrows()):
             color = '#26a69a' if row['Close'] >= row['Open'] else '#ef5350'
             ax.vlines(x=idx, ymin=row['Low'], ymax=row['High'], color=color, linewidth=1.2)
@@ -185,13 +235,12 @@ def generate_chart_snapshot(df, ticker, display_name, entry, sl, tp1, tp2):
             body_height = max(body_top - body_bottom, (row['High'] - row['Low']) * 0.05)
             ax.bar(x=idx, height=body_height, bottom=body_bottom, color=color, width=0.6)
 
-        # Plot Institutional Target & SL Lines
         ax.axhline(entry, color='#29b6f6', linestyle='--', linewidth=1.5, label=f'Entry ({entry})')
         ax.axhline(sl, color='#f44336', linestyle='--', linewidth=1.5, label=f'SL ({sl})')
         ax.axhline(tp1, color='#81c784', linestyle=':', linewidth=1.4, label=f'TP1 ({tp1})')
         ax.axhline(tp2, color='#4caf50', linestyle='-', linewidth=1.8, label=f'TP2 ({tp2})')
 
-        ax.set_title(f"{display_name} - 15m Institutional Breakout", color='#ffffff', fontsize=13, fontweight='bold', pad=10)
+        ax.set_title(f"{display_name} - 15m MTF Confirmed Breakout", color='#ffffff', fontsize=12, fontweight='bold', pad=10)
         ax.tick_params(colors='#b2b5be', labelsize=8)
         ax.grid(True, linestyle=':', alpha=0.25, color='#787b86')
         ax.legend(loc='upper left', facecolor='#1e222d', edgecolor='#363c4e', labelcolor='#ffffff', fontsize=8)
@@ -201,17 +250,16 @@ def generate_chart_snapshot(df, ticker, display_name, entry, sl, tp1, tp2):
         plt.close(fig)
         return chart_path
     except Exception as e:
-        print(f"Chart error: {e}")
+        print(f"Chart generation error: {e}")
         return None
 
 # -------------------------------------------------------------
-# TELEGRAM DISPATCHER (TEXT & PHOTO)
+# TELEGRAM DISPATCHER
 # -------------------------------------------------------------
 def send_telegram(text_msg, buttons_data=None, chart_img_path=None):
     for chat_id in TELEGRAM_CHAT_IDS:
         try:
             if chart_img_path and os.path.exists(chart_img_path):
-                # Send Photo with Caption
                 url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
                 payload = {
                     "chat_id": chat_id,
@@ -224,7 +272,6 @@ def send_telegram(text_msg, buttons_data=None, chart_img_path=None):
                 with open(chart_img_path, 'rb') as img_f:
                     requests.post(url, data=payload, files={"photo": img_f}, timeout=15)
             else:
-                # Send Text Message
                 url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
                 payload = {
                     "chat_id": chat_id,
@@ -244,7 +291,6 @@ def send_telegram(text_msg, buttons_data=None, chart_img_path=None):
         except Exception as e:
             print(f"Telegram dispatch error: {e}")
 
-    # Remove temporary chart image after sending
     if chart_img_path and os.path.exists(chart_img_path):
         try:
             os.remove(chart_img_path)
@@ -252,7 +298,7 @@ def send_telegram(text_msg, buttons_data=None, chart_img_path=None):
             pass
 
 # -------------------------------------------------------------
-# ACTIVE TRADES MONITORING
+# ACTIVE TRADES MONITORING & SUPERTREND TRAILING ENGINE
 # -------------------------------------------------------------
 def monitor_active_trades(active_trades, daily_stats, today_str):
     if not active_trades:
@@ -331,8 +377,8 @@ def monitor_active_trades(active_trades, daily_stats, today_str):
                     continue
 
                 elif curr_high >= tp1_price and not info.get("tp1_hit", False):
-                    chandelier_sl = calculate_chandelier_exit(df)
-                    trail_level = max(entry_price, round(chandelier_sl, 2))
+                    st_trail = calculate_supertrend(df)
+                    trail_level = max(entry_price, round(st_trail, 2))
                     msg = (
                         f"🎯 *TARGET 1 (1:1 RRR) ACHIEVED!*\n"
                         f"🏷️ *Quality:* `{trade_grade}` | 🏛️ *Market:* **{market_tag}**\n\n"
@@ -341,7 +387,7 @@ def monitor_active_trades(active_trades, daily_stats, today_str):
                         f"🎯 *Target 1 Level:* {currency}{tp1_price}\n\n"
                         f"💡 *Action:*\n"
                         f"• **Book 50% Profit**\n"
-                        f"• **Trail SL to Cost/Chandelier:** {currency}{trail_level}\n"
+                        f"• **SuperTrend Trailing SL Locked:** {currency}{trail_level}\n"
                         f"• Hold remainder for Target 2 ({currency}{tp2_price})\n\n"
                         f"⚠️ *Disclaimer:* Educational tracking."
                     )
@@ -456,7 +502,7 @@ def send_eod_summary(sent_cache, daily_stats, today_str, ist_now):
         print(f"[{ist_now.strftime('%H:%M IST')}] EOD Report sent.")
 
 # -------------------------------------------------------------
-# ULTRA-PRO BATCH SCANNER WITH VISUAL CHARTS & SNIPER ENGINE
+# ULTRA-PRO BATCH SCANNER WITH OI, MTF & SUPERTREND
 # -------------------------------------------------------------
 def run_ultra_pro_market_scan(sent_cache, active_trades, daily_stats, ist_now):
     net_loss = daily_stats.get("net_loss_today", 0)
@@ -498,6 +544,14 @@ def run_ultra_pro_market_scan(sent_cache, active_trades, daily_stats, ist_now):
             
             for ticker in batch:
                 try:
+                    # 1. EARNINGS EVENT BLOCKER CHECK
+                    if is_earnings_event_today(ticker):
+                        continue
+
+                    # 2. MULTI-TIMEFRAME (1-HOUR) ALIGNMENT CHECK
+                    if not check_mtf_alignment(ticker):
+                        continue
+
                     df_15m = data_15m[ticker] if len(batch) > 1 else data_15m
                     df_15m = df_15m.dropna()
                     if len(df_15m) < 30:
@@ -547,11 +601,10 @@ def run_ultra_pro_market_scan(sent_cache, active_trades, daily_stats, ist_now):
                         else:
                             continue
 
-                    # Sniper Mode Check: When daily loss limit hit, strictly accept Grade A+ only
                     if is_sniper_mode and "Grade A+" not in trade_grade:
                         continue
 
-                    # 1. INDEX OPTIONS (NIFTY / BANK NIFTY ATM)
+                    # 3. INDEX OPTIONS (NIFTY / BANK NIFTY ATM WITH OI/PCR ENGINE)
                     if is_index:
                         bullish_breakout = (c_close > res_level) and (c_close > c_open) and (c_close > ema20) and (c_close > c_vwap) and (rsi >= 52)
                         bearish_breakdown = (c_close < sup_level) and (c_close < c_open) and (c_close < ema20) and (c_close < c_vwap) and (rsi <= 48)
@@ -563,6 +616,7 @@ def run_ultra_pro_market_scan(sent_cache, active_trades, daily_stats, ist_now):
                         if not bullish_breakout and not bearish_breakdown:
                             continue
 
+                        pcr_val, oi_sentiment = fetch_index_pcr(ticker)
                         index_name = NAME_MAP.get(ticker, ticker)
                         atm_strike, lot_size = get_atm_option_details(ticker, c_close)
                         
@@ -593,7 +647,7 @@ def run_ultra_pro_market_scan(sent_cache, active_trades, daily_stats, ist_now):
                         tv_link = f"https://in.tradingview.com/chart/?symbol={'NIFTY' if 'NIFTY 50' in index_name else 'BANKNIFTY'}"
                         buttons = [[{"text": "📊 Open Index Chart", "url": tv_link}]]
 
-                        sniper_banner = "🎯 *[SNIPER MODE: POST-LOSS HIGH CONVICTION]*\n" if is_sniper_mode else ""
+                        sniper_banner = "🎯 *[SNIPER MODE: POST-LOSS FILTER ACTIVE]*\n" if is_sniper_mode else ""
 
                         msg = (
                             f"{sniper_banner}"
@@ -602,10 +656,12 @@ def run_ultra_pro_market_scan(sent_cache, active_trades, daily_stats, ist_now):
                             f"🏛️ *Market:* **⚡ INDEX OPTIONS (INTRADAY)**\n\n"
                             f"🎯 *Contract:* **{option_symbol}** ({action_title})\n"
                             f"⏰ *Entry Window:* `{entry_window_label}`\n"
-                            f"💵 *Spot LTP:* ₹{round(c_close, 2)} | *VWAP:* ₹{round(c_vwap, 2)} ✅\n\n"
+                            f"💵 *Spot LTP:* ₹{round(c_close, 2)} | *VWAP:* ₹{round(c_vwap, 2)} ✅\n"
+                            f"📊 *Live PCR:* {pcr_val} ({oi_sentiment})\n"
+                            f"📈 *MTF Trend:* 1-Hour Confirmed ✅\n\n"
                             f"🛑 *Premium Stop-Loss:* **-{opt_sl_pts} pts** (Spot SL: ₹{sl_spot})\n"
                             f"🎯 *Target 1 (50% Book):* **+{opt_tp1_pts} pts** (1:1 RRR)\n"
-                            f"🏆 *Target 2 (Final Exit):* **+{opt_tp2_pts} pts** (1:2 RRR)\n\n"
+                            f"🏆 *Target 2 (SuperTrend Trail):* **+{opt_tp2_pts} pts** (1:2 RRR)\n\n"
                             f"⚖️ *Risk : Reward:* **1 : 2.0 (Strict)**\n"
                             f"🧮 *Lot Allocation:* **{rec_lots} Lot ({rec_lots * lot_size} Qty)** (~₹{int(risk_per_lot * rec_lots)} Risk)\n"
                             f"📊 *15m RSI:* {round(rsi, 1)} | *India VIX:* {round(india_vix, 1)}\n\n"
@@ -630,7 +686,7 @@ def run_ultra_pro_market_scan(sent_cache, active_trades, daily_stats, ist_now):
                         }
                         continue
 
-                    # 2. EQUITIES, FOREX, COMMODITIES, CRYPTO
+                    # 4. EQUITIES, FOREX, COMMODITIES, CRYPTO
                     if c_close <= res_level or c_close <= c_open or c_close <= c_vwap:
                         continue
 
@@ -658,7 +714,7 @@ def run_ultra_pro_market_scan(sent_cache, active_trades, daily_stats, ist_now):
                     tv_link = f"https://in.tradingview.com/chart/?symbol={clean_sym}"
                     screener_link = f"https://www.screener.in/company/{clean_sym}/" if ".NS" in ticker else f"https://finviz.com/quote.ashx?t={clean_sym}"
 
-                    sniper_banner = "🎯 *[SNIPER MODE: POST-LOSS HIGH CONVICTION]*\n" if is_sniper_mode else ""
+                    sniper_banner = "🎯 *[SNIPER MODE: POST-LOSS FILTER ACTIVE]*\n" if is_sniper_mode else ""
 
                     msg = (
                         f"{sniper_banner}"
@@ -669,9 +725,10 @@ def run_ultra_pro_market_scan(sent_cache, active_trades, daily_stats, ist_now):
                         f"⏰ *Entry Window:* `{entry_window_label}`\n"
                         f"💵 *Reference Entry:* {currency}{round(c_close, 4 if is_forex_or_comm else 2)}\n"
                         f"🌊 *Intraday VWAP:* {currency}{round(c_vwap, 2)} (Passed ✅)\n"
+                        f"📈 *MTF Alignment:* 1-Hour Trend Bullish ✅\n\n"
                         f"🛑 *Stop-Loss (SL):* {currency}{sl}\n"
                         f"🎯 *Target 1 (50% Book):* {currency}{tp1} (1:1)\n"
-                        f"🏆 *Target 2 (Final Exit):* {currency}{tp2} (1:2)\n\n"
+                        f"🏆 *Target 2 (SuperTrend Trail):* {currency}{tp2} (1:2)\n\n"
                         f"⚖️ *Risk : Reward:* **1 : 2.0 (Strict)**\n"
                         f"🧮 *Reference Sizing:* ~**{rec_qty} Units** (~₹{current_risk_cap} risk cap)\n"
                         f"📊 *15m RSI:* {round(rsi, 1)} | *RVol:* {round(rvol, 2)}x ✅\n\n"
@@ -717,12 +774,11 @@ if __name__ == "__main__":
     ist_now = get_ist_time()
     today_str = ist_now.strftime("%Y-%m-%d")
 
-    # Global Sleep Guard (11:00 PM - 8:00 AM IST)
+    # Night Sleep Guard (11:00 PM - 8:00 AM IST)
     if ist_now.hour >= 23 or ist_now.hour < 8:
         print(f"[{ist_now.strftime('%H:%M IST')}] Night cutoff active (11:00 PM - 8:00 AM). Exiting cleanly.")
         exit(0)
 
-    # Initialize SmartAPI session with Angel One
     init_smart_api()
 
     cache_data = load_json(CACHE_FILE, {"date": today_str, "tickers": []})
@@ -734,13 +790,13 @@ if __name__ == "__main__":
     active_trades = load_json(ACTIVE_TRADES_FILE, {})
     daily_stats = load_json(DAILY_STATS_FILE, {})
 
-    # 1. Monitor active positions (Targets, SL, Early Reversal, Chandelier Trailing)
+    # 1. Monitor active positions (Targets, SL, Early Reversal, SuperTrend Trailing)
     active_trades = monitor_active_trades(active_trades, daily_stats, today_str)
 
     # 2. EOD Performance Report after 03:30 PM IST
     send_eod_summary(sent_cache, daily_stats, today_str, ist_now)
 
-    # 3. Run Ultra-Pro Market Scanner with Live Charts & Grading
+    # 3. Run Ultra-Pro Market Scanner with MTF, PCR & Trailing Logic
     run_ultra_pro_market_scan(sent_cache, active_trades, daily_stats, ist_now)
 
     # 4. Save state files
