@@ -173,8 +173,9 @@ with col2:
 with col3:
     auto_sync = st.checkbox("Auto-Sync (60s) 🔄", value=True)
 
+
 # -------------------------------------------------------------
-# 6. SECTOR MOMENTUM HEATMAP
+# 6. SECTOR MOMENTUM HEATMAP (COLORED CARDS)
 # -------------------------------------------------------------
 with st.expander("📊 Live Sectoral Momentum Heatmap (NSE)", expanded=True):
     try:
@@ -188,8 +189,42 @@ with st.expander("📊 Live Sectoral Momentum Heatmap (NSE)", expanded=True):
                 curr = float(s_df['Close'].iloc[-1])
                 prev = float(s_df['Close'].iloc[0])
                 pct = ((curr - prev) / prev) * 100
+
+                # Color Rules: Positive = Green card, Negative = Red card
+                if pct >= 0:
+                    bg_color = "#e8f5e9"    # Soft Green background
+                    border_color = "#2e7d32"
+                    text_color = "#1b5e20"  # Dark Green text
+                    icon = "▲"
+                else:
+                    bg_color = "#ffebee"    # Soft Red background
+                    border_color = "#c62828"
+                    text_color = "#b71c1c"  # Dark Red text
+                    icon = "▼"
+
+                clean_name = sec_name.replace("NIFTY ", "")
+
                 with sec_cols[idx]:
-                    st.metric(label=sec_name.replace("NIFTY ", ""), value=f"{curr:.1f}", delta=f"{pct:+.2f}%")
+                    st.markdown(f"""
+                        <div style="
+                            background-color: {bg_color}; 
+                            border: 1px solid {border_color}; 
+                            border-radius: 8px; 
+                            padding: 10px 4px; 
+                            text-align: center;
+                            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+                        ">
+                            <div style="font-size: 11px; font-weight: 700; color: #555555; text-transform: uppercase;">
+                                {clean_name}
+                            </div>
+                            <div style="font-size: 15px; font-weight: 800; color: #111111; margin: 2px 0;">
+                                {curr:.1f}
+                            </div>
+                            <div style="font-size: 12px; font-weight: 700; color: {text_color};">
+                                {icon} {pct:+.2f}%
+                            </div>
+                        </div>
+                    """, unsafe_allow_html=True)
             except Exception:
                 pass
     except Exception:
