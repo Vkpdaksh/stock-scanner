@@ -21,12 +21,15 @@ CACHE_FILE = "sent_alerts.json"
 ACTIVE_TRADES_FILE = "active_trades.json"
 DAILY_STATS_FILE = "daily_stats.json"
 
-DEFAULT_RISK_PER_TRADE = 1000  # ₹1,000 reference risk allocation
+DEFAULT_RISK_PER_TRADE = 1000  # Reference risk allocation in INR
 
 # -------------------------------------------------------------
 # WATCHLIST REGISTRY
 # -------------------------------------------------------------
+INDEX_OPTION_TICKERS = ["^NSEI", "^NSEBANK"]
+
 MARKET_CATEGORIES = {
+    "⚡ INDEX OPTIONS (INTRADAY)": INDEX_OPTION_TICKERS,
     "🇮🇳 INDIAN EQUITIES (NSE)": [
         "RELIANCE.NS", "TCS.NS", "INFY.NS", "HDFCBANK.NS", "ICICIBANK.NS", "SBIN.NS", "AXISBANK.NS",
         "KOTAKBANK.NS", "LT.NS", "BHARTIARTL.NS", "ITC.NS", "HINDUNILVR.NS", "TATAMOTORS.NS", "MARUTI.NS",
@@ -53,6 +56,8 @@ MARKET_CATEGORIES = {
 }
 
 NAME_MAP = {
+    "^NSEI": "NIFTY 50",
+    "^NSEBANK": "BANK NIFTY",
     "GC=F": "XAUUSD (Gold Futures)",
     "SI=F": "XAGUSD (Silver Futures)",
     "CL=F": "CRUDE OIL (WTI)",
@@ -75,6 +80,19 @@ def get_market_category(ticker):
         if ticker in t_list:
             return cat
     return "🌐 GLOBAL MARKET"
+
+def get_atm_option_details(index_ticker, spot_price):
+    if index_ticker == "^NSEI":
+        step = 50
+        lot_size = 25
+    elif index_ticker == "^NSEBANK":
+        step = 100
+        lot_size = 15
+    else:
+        step = 50
+        lot_size = 25
+    atm_strike = int(round(spot_price / step) * step)
+    return atm_strike, lot_size
 
 # -------------------------------------------------------------
 # FILE HELPERS
@@ -158,106 +176,196 @@ def monitor_active_trades(active_trades, daily_stats, today_str):
             tp2_price = info["tp2"]
             currency = info.get("currency", "")
             market_tag = info.get("market", "")
-            display_name = NAME_MAP.get(ticker, ticker.replace(".NS", "").replace("-USD", ""))
+            is_pe = info.get("is_pe", False)
+            display_name = info.get("display_name", NAME_MAP.get(ticker, ticker.replace(".NS", "")))
 
             clean_sym = ticker.replace(".NS", "").replace("-USD", "").replace("=F", "").replace("=X", "")
             tv_link = f"https://in.tradingview.com/chart/?symbol={clean_sym}"
             buttons = [[{"text": "📊 Open TradingView", "url": tv_link}]]
 
-            # ---------------------------------------------------------
-            # 1. STOP-LOSS HIT (Worst Case Floor)
-            # ---------------------------------------------------------
-            if curr_low <= sl_price:
-                msg = (
-                    f"🛑 *STOP-LOSS HIT / EXIT ALERT*\n"
-                    f"🏛️ *Market:* **{market_tag}**\n\n"
-                    f"📉 *Asset:* **{display_name}**\n"
-                    f"💵 *LTP:* {currency}{round(curr_price, 4 if '=' in ticker else 2)}\n"
-                    f"🛑 *SL Level Triggered:* {currency}{sl_price}\n"
-                    f"💡 *Action:* **Exit immediately** to safeguard capital.\n\n"
-                    f"⚠️ *Disclaimer:* Algorithmic notification for tracking purposes only."
-                )
-                send_telegram(msg, buttons)
-                daily_stats["closed_trades"].append({"date": today_str, "ticker": display_name, "result": "SL"})
-                continue  # Trade closed, remove from active
+            # LONG TRADES & CALL OPTIONS (CE)
+            if not is_pe:
+                if curr_low <= sl_price:
+                    msg = (
+                        f"🛑 *STOP-LOSS HIT / EXIT ALERT*\n"
+                        f"🏛️ *Market:* **{market_tag}**\n\n"
+                        f"📉 *Asset:* **{display_name}**\n"
+                        f"💵 *Trigger Price:* {currency}{round(curr_price, 2)}\n"
+                        f"🛑 *SL Level Hit:* {currency}{sl_price}\n"
+                        f"💡 *Action:* **Exit position** to preserve capital.\n\n"
+                        f"⚠️ *Disclaimer:* Algorithmic notification for tracking."
+                    )
+                    send_telegram(msg, buttons)
+                    daily_stats["closed_trades"].append({"date": today_str, "ticker": display_name, "result": "SL"})
+                    continue
 
-            # ---------------------------------------------------------
-            # 2. EARLY REVERSAL EXIT (BEFORE SL HIT)
-            # Agar price breakout level ke wapas andar gir jaye aur 2 candles sustain na kare
-            # ---------------------------------------------------------
-            c1 = float(df['Close'].iloc[-1])
-            c2 = float(df['Close'].iloc[-2])
-            if (c1 < breakout_level and c2 < breakout_level) and not info.get("tp1_hit", False):
-                msg = (
-                    f"⚠️ *EARLY REVERSAL DETECTED (EXIT BEFORE SL)*\n"
-                    f"🏛️ *Market:* **{market_tag}**\n\n"
-                    f"📉 *Asset:* **{display_name}**\n"
-                    f"🔍 *Reason:* Price fell back inside base level ({currency}{breakout_level})\n"
-                    f"💵 *Current LTP:* {currency}{round(curr_price, 4 if '=' in ticker else 2)} (Entry: {currency}{entry_price})\n"
-                    f"💡 *Action:* **Exit near cost/minimal loss**. Breakout failed, do NOT wait for full SL hit.\n\n"
-                    f"⚠️ *Disclaimer:* Risk management alert for algorithmic tracking."
-                )
-                send_telegram(msg, buttons)
-                daily_stats["closed_trades"].append({"date": today_str, "ticker": display_name, "result": "EARLY_EXIT"})
-                continue  # Trade invalidated early, save capital!
+                c1, c2 = float(df['Close'].iloc[-1]), float(df['Close'].iloc[-2])
+                if (c1 < breakout_level and c2 < breakout_level) and not info.get("tp1_hit", False):
+                    msg = (
+                        f"⚠️ *EARLY REVERSAL DETECTED (EXIT BEFORE SL)*\n"
+                        f"🏛️ *Market:* **{market_tag}**\n\n"
+                        f"📉 *Asset:* **{display_name}**\n"
+                        f"🔍 *Reason:* Price dropped back below breakout base ({currency}{breakout_level})\n"
+                        f"💵 *LTP:* {currency}{round(curr_price, 2)} (Entry: {currency}{entry_price})\n"
+                        f"💡 *Action:* **Exit near cost/minimal loss**. Breakout failed, avoid full SL.\n\n"
+                        f"⚠️ *Disclaimer:* Algorithmic risk control alert."
+                    )
+                    send_telegram(msg, buttons)
+                    daily_stats["closed_trades"].append({"date": today_str, "ticker": display_name, "result": "EARLY_EXIT"})
+                    continue
 
-            # ---------------------------------------------------------
-            # 3. TARGET 1 HIT (1:1 RRR - 50% Book & Trail SL to Entry)
-            # ---------------------------------------------------------
-            elif curr_high >= tp1_price and not info.get("tp1_hit", False):
-                msg = (
-                    f"🎯 *TARGET 1 (1:1) ACHIEVED!*\n"
-                    f"🏛️ *Market:* **{market_tag}**\n\n"
-                    f"🏆 *Asset:* **{display_name}**\n"
-                    f"💵 *LTP:* {currency}{round(curr_price, 4 if '=' in ticker else 2)} (Entry: {currency}{entry_price})\n"
-                    f"🎯 *Target 1 Level:* {currency}{tp1_price}\n\n"
-                    f"💡 *Recommended Action:*\n"
-                    f"• **Book 50% Profit**\n"
-                    f"• **Trail Stop-Loss to Entry/Cost** ({currency}{entry_price})\n"
-                    f"• Hold remaining 50% for Final Target 2 ({currency}{tp2_price})\n\n"
-                    f"⚠️ *Disclaimer:* Educational tracking notification."
-                )
-                send_telegram(msg, buttons)
-                info["tp1_hit"] = True
-                info["sl"] = entry_price  # Stop-loss shifted to cost (Risk-Free Trade)
-                updated_trades[ticker] = info
-                daily_stats["closed_trades"].append({"date": today_str, "ticker": display_name, "result": "TP1"})
+                elif curr_high >= tp1_price and not info.get("tp1_hit", False):
+                    msg = (
+                        f"🎯 *TARGET 1 (1:1) ACHIEVED!*\n"
+                        f"🏛️ *Market:* **{market_tag}**\n\n"
+                        f"🏆 *Asset:* **{display_name}**\n"
+                        f"💵 *LTP:* {currency}{round(curr_price, 2)} (Entry: {currency}{entry_price})\n"
+                        f"🎯 *Target 1 Level:* {currency}{tp1_price}\n\n"
+                        f"💡 *Recommended Action:*\n"
+                        f"• **Book 50% Profit**\n"
+                        f"• **Trail Stop-Loss to Cost/Entry** ({currency}{entry_price})\n"
+                        f"• Hold remaining 50% for Final Target 2 ({currency}{tp2_price})\n\n"
+                        f"⚠️ *Disclaimer:* Educational tracking notification."
+                    )
+                    send_telegram(msg, buttons)
+                    info["tp1_hit"] = True
+                    info["sl"] = entry_price
+                    updated_trades[ticker] = info
+                    daily_stats["closed_trades"].append({"date": today_str, "ticker": display_name, "result": "TP1"})
 
-            # ---------------------------------------------------------
-            # 4. FINAL TARGET 2 HIT (1:2 RRR - Full Exit)
-            # ---------------------------------------------------------
-            elif curr_high >= tp2_price:
-                msg = (
-                    f"🏆 *FINAL TARGET 2 (1:2) ACHIEVED!*\n"
-                    f"🏛️ *Market:* **{market_tag}**\n\n"
-                    f"🚀 *Asset:* **{display_name}**\n"
-                    f"💵 *LTP:* {currency}{round(curr_price, 4 if '=' in ticker else 2)}\n"
-                    f"🎯 *Final Target:* {currency}{tp2_price}\n\n"
-                    f"💡 *Recommended Action:* **Close full position** and lock complete 1:2 profit!\n\n"
-                    f"⚠️ *Disclaimer:* Educational tracking notification."
-                )
-                send_telegram(msg, buttons)
-                daily_stats["closed_trades"].append({"date": today_str, "ticker": display_name, "result": "TP2"})
-                continue  # Full exit, remove from active
+                elif curr_high >= tp2_price:
+                    msg = (
+                        f"🏆 *FINAL TARGET 2 (1:2) ACHIEVED!*\n"
+                        f"🏛️ *Market:* **{market_tag}**\n\n"
+                        f"🚀 *Asset:* **{display_name}**\n"
+                        f"💵 *LTP:* {currency}{round(curr_price, 2)}\n"
+                        f"🎯 *Final Target:* {currency}{tp2_price}\n\n"
+                        f"💡 *Recommended Action:* **Close remaining position** and lock full 1:2 profit!\n\n"
+                        f"⚠️ *Disclaimer:* Educational tracking notification."
+                    )
+                    send_telegram(msg, buttons)
+                    daily_stats["closed_trades"].append({"date": today_str, "ticker": display_name, "result": "TP2"})
+                    continue
+                else:
+                    updated_trades[ticker] = info
 
+            # PUT OPTIONS (PE)
             else:
-                updated_trades[ticker] = info
+                if curr_high >= sl_price:
+                    msg = (
+                        f"🛑 *STOP-LOSS HIT / EXIT ALERT (PE TRADE)*\n"
+                        f"🏛️ *Market:* **{market_tag}**\n\n"
+                        f"📉 *Asset:* **{display_name}**\n"
+                        f"💵 *Spot Trigger:* {round(curr_price, 2)}\n"
+                        f"🛑 *SL Level Hit:* {sl_price}\n"
+                        f"💡 *Action:* **Exit PE position** immediately.\n\n"
+                        f"⚠️ *Disclaimer:* Algorithmic notification."
+                    )
+                    send_telegram(msg, buttons)
+                    daily_stats["closed_trades"].append({"date": today_str, "ticker": display_name, "result": "SL"})
+                    continue
+
+                elif curr_low <= tp1_price and not info.get("tp1_hit", False):
+                    msg = (
+                        f"🎯 *TARGET 1 (1:1) ACHIEVED (PE TRADE)!*\n"
+                        f"🏛️ *Market:* **{market_tag}**\n\n"
+                        f"🏆 *Asset:* **{display_name}**\n"
+                        f"💵 *Spot LTP:* {round(curr_price, 2)}\n"
+                        f"🎯 *Target 1 Level:* {tp1_price}\n\n"
+                        f"💡 *Recommended Action:*\n"
+                        f"• **Book 50% PE Profit**\n"
+                        f"• **Trail Stop-Loss to Entry** ({entry_price})\n"
+                        f"• Hold remainder for Target 2 ({tp2_price})\n\n"
+                        f"⚠️ *Disclaimer:* Educational tracking."
+                    )
+                    send_telegram(msg, buttons)
+                    info["tp1_hit"] = True
+                    info["sl"] = entry_price
+                    updated_trades[ticker] = info
+                    daily_stats["closed_trades"].append({"date": today_str, "ticker": display_name, "result": "TP1"})
+
+                elif curr_low <= tp2_price:
+                    msg = (
+                        f"🏆 *FINAL TARGET 2 (1:2) ACHIEVED (PE TRADE)!*\n"
+                        f"🏛️ *Market:* **{market_tag}**\n\n"
+                        f"🚀 *Asset:* **{display_name}**\n"
+                        f"💵 *Spot LTP:* {round(curr_price, 2)}\n"
+                        f"🎯 *Final Target:* {tp2_price}\n\n"
+                        f"💡 *Recommended Action:* **Close full PE position**.\n\n"
+                        f"⚠️ *Disclaimer:* Educational tracking."
+                    )
+                    send_telegram(msg, buttons)
+                    daily_stats["closed_trades"].append({"date": today_str, "ticker": display_name, "result": "TP2"})
+                    continue
+                else:
+                    updated_trades[ticker] = info
+
         except Exception:
             updated_trades[ticker] = info
 
     return updated_trades
 
 # -------------------------------------------------------------
-# BATCH SCANNER WITH 1:1 AND 1:2 RRR
+# EOD SUMMARY REPORT ENGINE
+# -------------------------------------------------------------
+def send_eod_summary(sent_cache, daily_stats, today_str, ist_now):
+    if (ist_now.hour > 15) or (ist_now.hour == 15 and ist_now.minute >= 30):
+        if daily_stats.get("eod_sent_date") == today_str:
+            return
+
+        closed = daily_stats.get("closed_trades", [])
+        today_closed = [t for t in closed if t.get("date") == today_str]
+
+        tp1_count = sum(1 for t in today_closed if t.get("result") == "TP1")
+        tp2_count = sum(1 for t in today_closed if t.get("result") == "TP2")
+        sl_count = sum(1 for t in today_closed if t.get("result") == "SL")
+        early_count = sum(1 for t in today_closed if t.get("result") == "EARLY_EXIT")
+        total_alerts = len(sent_cache)
+
+        eod_msg = (
+            f"📋 *END OF DAY (EOD) PERFORMANCE REPORT*\n"
+            f"📅 *Date:* `{today_str}` | *Status: NSE SESSION CLOSED*\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"🎯 *Total Alerts Generated:* {total_alerts}\n\n"
+            f"✅ *Target 1 Hit (1:1 - 50% Booked):* {tp1_count}\n"
+            f"🏆 *Target 2 Hit (1:2 - Full Exit):* {tp2_count}\n"
+            f"⚠️ *Early Reversal Exits (Saved SL):* {early_count}\n"
+            f"🛑 *Stop-Loss Hit:* {sl_count}\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"💡 *Risk Capping:* System maintained strictly disciplined risk-to-reward.\n\n"
+            f"⚠️ *Disclaimer:* Automated study ledger. Not financial advice."
+        )
+
+        send_telegram(eod_msg)
+        daily_stats["eod_sent_date"] = today_str
+        print(f"[{ist_now.strftime('%H:%M IST')}] EOD Report successfully sent to Telegram.")
+
+# -------------------------------------------------------------
+# BATCH SCANNER WITH HARD INDIAN SESSION LOCK (09:15 - 15:15)
 # -------------------------------------------------------------
 def run_batch_market_scan(sent_cache, active_trades, ist_now):
     batch_size = 35
     all_tickers = []
-    for cat_list in MARKET_CATEGORIES.values():
+    
+    # HARD LOCK: Indian Market strictly 09:15 AM to 03:15 PM IST
+    indian_market_active = (
+        (ist_now.hour == 9 and ist_now.minute >= 15) or 
+        (10 <= ist_now.hour < 15) or 
+        (ist_now.hour == 15 and ist_now.minute < 15)
+    )
+
+    for cat_name, cat_list in MARKET_CATEGORIES.items():
+        is_indian = ("INDIAN" in cat_name or "INDEX" in cat_name)
+        if is_indian and not indian_market_active:
+            continue
         all_tickers.extend(cat_list)
 
     scan_candidates = [t for t in all_tickers if t not in sent_cache and t not in active_trades]
     
+    if not scan_candidates:
+        print(f"[{ist_now.strftime('%H:%M IST')}] No active candidates to scan in current active markets.")
+        return
+
     curr_min = ist_now.minute
     start_window_min = (curr_min // 15) * 15
     start_time_str = ist_now.replace(minute=start_window_min).strftime("%I:%M %p")
@@ -274,36 +382,110 @@ def run_batch_market_scan(sent_cache, active_trades, ist_now):
                 try:
                     df_15m = data_15m[ticker] if len(batch) > 1 else data_15m
                     df_15m = df_15m.dropna()
-                    if len(df_15m) < 25:
+                    if len(df_15m) < 20:
                         continue
 
                     c_close = float(df_15m['Close'].iloc[-1])
                     c_open = float(df_15m['Open'].iloc[-1])
                     c_vol = float(df_15m['Volume'].iloc[-1])
 
-                    prev_window = df_15m.iloc[-25:-1]
+                    is_index = ticker in INDEX_OPTION_TICKERS
+                    prev_window_len = 16 if is_index else 25
+                    prev_window = df_15m.iloc[-prev_window_len:-1]
                     res_level = float(prev_window['High'].max())
+                    sup_level = float(prev_window['Low'].min())
                     avg_vol = float(prev_window['Volume'].mean()) or 1.0
 
-                    if c_close <= res_level or c_close <= c_open:
-                        continue
-
-                    is_forex_or_comm = ("=" in ticker or "^" in ticker)
-                    rvol = (c_vol / avg_vol) if avg_vol > 0 else 1.0
-                    
-                    if not is_forex_or_comm and rvol < 1.5:
-                        continue
-
                     atr_series = ta.volatility.average_true_range(df_15m['High'], df_15m['Low'], df_15m['Close'], window=14)
-                    atr = float(atr_series.dropna().iloc[-1]) if not atr_series.dropna().empty else (c_close * 0.01)
+                    atr = float(atr_series.dropna().iloc[-1]) if not atr_series.dropna().empty else (c_close * 0.005)
 
                     rsi_series = ta.momentum.rsi(df_15m['Close'], window=14)
                     rsi = float(rsi_series.dropna().iloc[-1]) if not rsi_series.dropna().empty else 50.0
 
+                    ema20_series = ta.trend.ema_indicator(df_15m['Close'], window=20)
+                    ema20 = float(ema20_series.dropna().iloc[-1]) if not ema20_series.dropna().empty else c_close
+
+                    is_forex_or_comm = ("=" in ticker or "^" in ticker)
+                    rvol = (c_vol / avg_vol) if avg_vol > 0 else 1.0
+                    vol_passed = True if (is_forex_or_comm or is_index) else (rvol >= 1.5)
+
+                    # 1. INDEX OPTIONS (NIFTY / BANK NIFTY)
+                    if is_index:
+                        bullish_breakout = (c_close > res_level) and (c_close > c_open) and (c_close > ema20) and (rsi >= 52)
+                        bearish_breakdown = (c_close < sup_level) and (c_close < c_open) and (c_close < ema20) and (rsi <= 48)
+
+                        if not bullish_breakout and not bearish_breakdown:
+                            continue
+
+                        index_name = NAME_MAP.get(ticker, ticker)
+                        atm_strike, lot_size = get_atm_option_details(ticker, c_close)
+                        
+                        opt_sl_pts = max(round(atr * 0.4, 1), 18.0 if "NIFTY 50" in index_name else 40.0)
+                        opt_tp1_pts = round(opt_sl_pts * 1.0, 1)
+                        opt_tp2_pts = round(opt_sl_pts * 2.0, 1)
+
+                        risk_per_lot = opt_sl_pts * lot_size
+                        rec_lots = max(1, int(DEFAULT_RISK_PER_TRADE / risk_per_lot))
+
+                        if bullish_breakout:
+                            option_symbol = f"{index_name} {atm_strike} CE"
+                            sl_spot = round(c_close - (1.0 * atr), 2)
+                            tp1_spot = round(c_close + (1.0 * atr), 2)
+                            tp2_spot = round(c_close + (2.0 * atr), 2)
+                            action_title = f"🟢 BUY {atm_strike} CALL (CE)"
+                            is_pe = False
+                        else:
+                            option_symbol = f"{index_name} {atm_strike} PE"
+                            sl_spot = round(c_close + (1.0 * atr), 2)
+                            tp1_spot = round(c_close - (1.0 * atr), 2)
+                            tp2_spot = round(c_close - (2.0 * atr), 2)
+                            action_title = f"🔴 BUY {atm_strike} PUT (PE)"
+                            is_pe = True
+
+                        tv_link = f"https://in.tradingview.com/chart/?symbol={'NIFTY' if 'NIFTY 50' in index_name else 'BANKNIFTY'}"
+                        buttons = [[{"text": "📊 Open Index Chart", "url": tv_link}]]
+
+                        msg = (
+                            f"⚡ *INDEX OPTION MOMENTUM ALERT*\n"
+                            f"🏛️ *Market:* **⚡ INDEX OPTIONS (INTRADAY)**\n\n"
+                            f"🎯 *Setup:* **{action_title}**\n"
+                            f"📈 *Contract:* **{option_symbol}**\n"
+                            f"⏰ *Entry Window:* `{entry_window_label}`\n"
+                            f"💵 *Underlying Spot:* ₹{round(c_close, 2)}\n\n"
+                            f"🛑 *Premium Stop-Loss:* **-{opt_sl_pts} pts** (Spot SL: ₹{sl_spot})\n"
+                            f"🎯 *Target 1 (50% Book):* **+{opt_tp1_pts} pts** (1:1 RRR)\n"
+                            f"🏆 *Target 2 (Final Exit):* **+{opt_tp2_pts} pts** (1:2 RRR)\n\n"
+                            f"⚖️ *Risk : Reward:* **1 : 2.0 (Institutional)**\n"
+                            f"🧮 *Lot Allocation:* **{rec_lots} Lot ({rec_lots * lot_size} Qty)** (~₹{int(risk_per_lot * rec_lots)} Risk Cap)\n"
+                            f"📊 *15m RSI:* {round(rsi, 1)} | *Structure:* Confirmed Breakout ✅\n\n"
+                            f"⚠️ *Disclaimer:* Algorithmic study. Not SEBI registered investment advice. Strictly adhere to stop loss."
+                        )
+
+                        send_telegram(msg, buttons)
+                        sent_cache.add(ticker)
+                        active_trades[ticker] = {
+                            "entry": round(c_close, 2),
+                            "breakout_level": round(res_level if not is_pe else sup_level, 2),
+                            "sl": sl_spot,
+                            "tp1": tp1_spot,
+                            "tp2": tp2_spot,
+                            "currency": "₹",
+                            "market": "⚡ INDEX OPTIONS",
+                            "display_name": option_symbol,
+                            "is_pe": is_pe,
+                            "tp1_hit": False,
+                            "date": ist_now.strftime("%Y-%m-%d")
+                        }
+                        print(f"Option Alert Sent: {option_symbol}")
+                        continue
+
+                    # 2. EQUITIES, FOREX, COMMODITIES, CRYPTO
+                    if c_close <= res_level or c_close <= c_open or not vol_passed:
+                        continue
+
                     if rsi < 48 or rsi > 80:
                         continue
 
-                    # 1:1 for TP1, 1:2 for TP2
                     sl_dist = 1.0 * atr
                     sl = round(c_close - sl_dist, 4 if is_forex_or_comm else 2)
                     tp1 = round(c_close + sl_dist, 4 if is_forex_or_comm else 2)
@@ -353,10 +535,12 @@ def run_batch_market_scan(sent_cache, active_trades, ist_now):
                         "tp2": tp2,
                         "currency": currency,
                         "market": market_tag,
+                        "display_name": display_name,
+                        "is_pe": False,
                         "tp1_hit": False,
                         "date": ist_now.strftime("%Y-%m-%d")
                     }
-                    print(f"Alert sent & tracked: {display_name}")
+                    print(f"Equity/Forex Alert sent & tracked: {display_name}")
                 except Exception:
                     continue
 
@@ -372,7 +556,7 @@ if __name__ == "__main__":
     ist_now = get_ist_time()
     today_str = ist_now.strftime("%Y-%m-%d")
 
-    # SLEEP GUARD: Raat 11:00 PM - Subah 8:00 AM IST tak exit
+    # Global Sleep Guard: Raat 11:00 PM se Subah 8:00 AM IST tak complete sleep
     if ist_now.hour >= 23 or ist_now.hour < 8:
         print(f"[{ist_now.strftime('%H:%M IST')}] Night cutoff active (11:00 PM - 8:00 AM). Exiting clean.")
         exit(0)
@@ -386,13 +570,16 @@ if __name__ == "__main__":
     active_trades = load_json(ACTIVE_TRADES_FILE, {})
     daily_stats = load_json(DAILY_STATS_FILE, {})
 
-    # 1. MONITOR ACTIVE TRADES (EARLY EXIT + SL + TARGET 1 & 2)
+    # 1. Monitor active trades
     active_trades = monitor_active_trades(active_trades, daily_stats, today_str)
 
-    # 2. RUN BATCH SCAN FOR NEW TRADES
+    # 2. Send EOD Performance Report after 03:30 PM IST
+    send_eod_summary(sent_cache, daily_stats, today_str, ist_now)
+
+    # 3. Run market scanner
     run_batch_market_scan(sent_cache, active_trades, ist_now)
 
-    # 3. SAVE STATE
+    # 4. Save updated states
     save_json(CACHE_FILE, {"date": today_str, "tickers": list(sent_cache)})
     save_json(ACTIVE_TRADES_FILE, active_trades)
     save_json(DAILY_STATS_FILE, daily_stats)
