@@ -1,13 +1,16 @@
+import os
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import numpy as np
 import yfinance as yf
 import ta
+import pyotp
 from datetime import datetime, timezone, timedelta
 
 # Page Configuration
 st.set_page_config(
-    page_title="Institutional Grade Trading Terminal",
+    page_title="Institutional Trading Terminal",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
@@ -16,18 +19,83 @@ st.set_page_config(
 st.markdown("""
 <style>
     .main { background-color: #0e1117; }
-    .metric-card {
+    .stMetric {
         background-color: #1a1c24;
         border-radius: 8px;
-        padding: 15px;
+        padding: 10px;
         border: 1px solid #2d3139;
+    }
+    .sector-card {
+        border-radius: 6px;
+        padding: 10px;
+        margin: 4px;
+        text-align: center;
+        font-weight: bold;
     }
 </style>
 """, unsafe_allow_html=True)
 
 # -------------------------------------------------------------
-# WATCHLIST DICTIONARY
+# ANGEL ONE SMARTAPI SETUP & ORDER EXECUTION
 # -------------------------------------------------------------
+ANGEL_API_KEY = os.environ.get("ANGEL_API_KEY", "")
+ANGEL_CLIENT_ID = os.environ.get("ANGEL_CLIENT_ID", "")
+ANGEL_MPIN = os.environ.get("ANGEL_MPIN", "")
+ANGEL_TOTP_KEY = os.environ.get("ANGEL_TOTP_KEY", "")
+
+@st.cache_resource(ttl=3600)
+def get_smartapi_session():
+    if not (ANGEL_API_KEY and ANGEL_CLIENT_ID and ANGEL_MPIN and ANGEL_TOTP_KEY):
+        return None
+    try:
+        from SmartApi import SmartConnect
+        totp = pyotp.TOTP(ANGEL_TOTP_KEY).now()
+        smart_api = SmartConnect(api_key=ANGEL_API_KEY)
+        session_data = smart_api.generateSession(ANGEL_CLIENT_ID, ANGEL_MPIN, totp)
+        if session_data.get("status"):
+            return smart_api
+    except Exception:
+        pass
+    return None
+
+def place_order_smartapi(symbol_token, trading_symbol, exchange, qty, transaction_type):
+    api = get_smartapi_session()
+    if not api:
+        return False, "SmartAPI session not active. Check credentials."
+    try:
+        order_params = {
+            "variety": "NORMAL",
+            "tradingsymbol": trading_symbol,
+            "symboltoken": str(symbol_token),
+            "transactiontype": transaction_type,
+            "exchange": exchange,
+            "ordertype": "MARKET",
+            "producttype": "INTRADAY",
+            "duration": "DAY",
+            "quantity": str(qty)
+        }
+        response = api.placeOrder(order_params)
+        if response.get("status"):
+            return True, f"Order placed successfully! ID: {response.get('data', {}).get('orderid')}"
+        else:
+            return False, response.get("message", "Order rejected by broker")
+    except Exception as e:
+        return False, str(e)
+
+# -------------------------------------------------------------
+# ASSET UNIVERSES & SECTOR REGISTRY
+# -------------------------------------------------------------
+SECTOR_INDICES = {
+    "NIFTY BANK": "^NSEBANK",
+    "NIFTY IT": "^CNXIT",
+    "NIFTY AUTO": "^CNXAUTO",
+    "NIFTY METAL": "^CNXMETAL",
+    "NIFTY PHARMA": "^CNXPHARMA",
+    "NIFTY ENERGY": "^CNXENERGY",
+    "NIFTY FMCG": "^CNXFMCG",
+    "NIFTY REALTY": "^CNXREALTY"
+}
+
 MARKET_UNIVERSES = {
     "Index Options (Intraday)": ["^NSEI", "^NSEBANK"],
     "Indian Equities (NSE)": [
@@ -85,13 +153,13 @@ def calculate_vwap(df):
 # -------------------------------------------------------------
 st.title("⚡ Institutional Grade Trading Terminal")
 
-col1, col2, col3, col4 = st.columns([2, 1.5, 1, 1])
+col1, col2, col3 = st.columns([2, 1.5, 1])
 
 with col1:
     selected_universe = st.selectbox(
         "Active Asset Universe:",
         list(MARKET_UNIVERSES.keys()),
-        index=3  # Defaults to Forex & Commodities as in dashboard
+        index=0
     )
 
 with col2:
@@ -104,10 +172,36 @@ with col2:
     )
 
 with col3:
-    audio_chime = st.checkbox("Audio Chime 🔔", value=False)
-
-with col4:
     auto_sync = st.checkbox("Auto-Sync (60s) 🔄", value=True)
+
+# -------------------------------------------------------------
+# SECTOR MOMENTUM HEATMAP
+# -------------------------------------------------------------
+with st.expander("📊 Live Sectoral Momentum Heatmap (NSE)", expanded=True):
+    try:
+        sector_tickers = list(SECTOR_INDICES.values())
+        sec_data = yf.download(sector_tickers, period="2d", interval="15m", group_by='ticker', progress=False)
+        cols = st.columns(len(SECTOR_INDICES))
+        
+        for idx, (sec_name, sec_sym) in enumerate(SECTOR_INDICES.items()):
+            try:
+                s_df = sec_data[sec_sym].dropna()
+                curr = float(s_df['Close'].iloc[-1])
+                prev = float(s_df['Close'].iloc[0])
+                pct = ((curr - prev) / prev) * 100
+                bg_color = "#1b5e20" if pct > 0.5 else ("#2e7d32" if pct > 0 else ("#b71c1c" if pct < -0.5 else "#c62828"))
+                
+                with cols[idx]:
+                    st.markdown(f"""
+                        <div style="background-color: {bg_color}; border-radius: 6px; padding: 8px; text-align: center;">
+                            <div style="font-size: 11px; color: #cfd8dc;">{sec_name}</div>
+                            <div style="font-size: 14px; font-weight: bold; color: white;">{pct:+.2f}%</div>
+                        </div>
+                    """, unsafe_allow_html=True)
+            except Exception:
+                pass
+    except Exception:
+        st.caption("Sector data fetching paused.")
 
 # -------------------------------------------------------------
 # DATA ENGINE & SCANNER
@@ -117,13 +211,11 @@ tickers = MARKET_UNIVERSES[selected_universe]
 @st.cache_data(ttl=60)
 def fetch_market_data(ticker_list):
     try:
-        data = yf.download(ticker_list, period="5d", interval="15m", group_by='ticker', progress=False)
-        return data
+        return yf.download(ticker_list, period="5d", interval="15m", group_by='ticker', progress=False)
     except Exception:
         return None
 
 raw_data = fetch_market_data(tickers)
-
 records = []
 active_breakouts = 0
 
@@ -163,9 +255,6 @@ if raw_data is not None:
             rvol = (c_vol / avg_vol) if avg_vol > 0 else 1.0
             rvol_display = "Liquid" if is_special else f"{round(rvol, 2)}x"
 
-            # -------------------------------------------------------------
-            # SIGNAL & SETUP GRADING ENGINE
-            # -------------------------------------------------------------
             is_breakout = (c_close > res_level) and (c_close > c_open) and (c_close > ema20)
             is_breakdown = (c_close < sup_level) and (c_close < c_open) and (c_close < ema20)
 
@@ -191,7 +280,6 @@ if raw_data is not None:
                 signal = "⚪ CONSOLIDATION"
                 grade = "Neutral"
 
-            # RRR Calculations (1:1 & 1:2 RRR)
             sl_dist = 1.0 * atr
             if "SELL" in signal:
                 sl = c_close + sl_dist
@@ -209,6 +297,7 @@ if raw_data is not None:
             decimals = 4 if is_special and "USD" in ticker else 2
 
             records.append({
+                "Ticker": ticker,
                 "Asset": display_name,
                 "Signal": signal,
                 "Setup Grade": grade,
@@ -218,34 +307,109 @@ if raw_data is not None:
                 "Target 2 (1:2)": round(target_2, decimals),
                 "RVol": rvol_display,
                 "RSI": round(rsi, 1),
-                "Recommended Size": f"{rec_size} Units"
+                "Size": rec_size
             })
         except Exception:
             continue
 
 # -------------------------------------------------------------
-# METRICS ROW
+# METRICS & TABLE DISPLAY
 # -------------------------------------------------------------
 m_col1, m_col2, m_col3 = st.columns(3)
-
 with m_col1:
     st.metric("Universe Tracked", len(tickers))
 with m_col2:
     st.metric("Active Breakouts", active_breakouts)
 with m_col3:
-    st.metric("Selected Segment", selected_universe)
+    st.metric("Selected Universe", selected_universe)
 
 st.markdown("---")
 
-# -------------------------------------------------------------
-# LIVE MONITORING TABLE
-# -------------------------------------------------------------
 if records:
     df_display = pd.DataFrame(records)
     st.dataframe(
-        df_display,
+        df_display.drop(columns=["Ticker", "Size"]),
         use_container_width=True,
-        hide_index=False
+        hide_index=True
     )
 else:
-    st.info("No active market data fetched for this universe. Check market hours or network connection.")
+    st.info("No active market data fetched for this universe.")
+
+# -------------------------------------------------------------
+# 1-CLICK ANGEL ONE SMARTAPI ORDER EXECUTION CONSOLE
+# -------------------------------------------------------------
+st.markdown("### ⚡ 1-Click SmartAPI Order Execution")
+ord_col1, ord_col2, ord_col3, ord_col4 = st.columns([2, 1.5, 1.5, 1.5])
+
+asset_names = [r["Asset"] for r in records] if records else []
+with ord_col1:
+    chosen_asset_name = st.selectbox("Select Asset to Trade:", asset_names if asset_names else ["None"])
+
+chosen_record = next((r for r in records if r["Asset"] == chosen_asset_name), None)
+
+with ord_col2:
+    trade_side = st.selectbox("Order Type:", ["BUY", "SELL"])
+
+with ord_col3:
+    default_lot = chosen_record["Size"] if chosen_record else 1
+    order_qty = st.number_input("Execution Quantity:", min_value=1, value=max(1, default_lot), step=1)
+
+with ord_col4:
+    st.write("")
+    st.write("")
+    if st.button("🚀 Fire Order in Angel One", use_container_width=True):
+        if not chosen_record:
+            st.warning("Select a valid asset first.")
+        else:
+            raw_sym = chosen_record["Ticker"]
+            exch = "NSE" if ".NS" in raw_sym or "^NSE" in raw_sym else "MCX"
+            clean_token = raw_sym.replace(".NS", "").replace("^", "")
+            
+            success, msg = place_order_smartapi(
+                symbol_token=clean_token,
+                trading_symbol=clean_token,
+                exchange=exch,
+                qty=order_qty,
+                transaction_type=trade_side
+            )
+            if success:
+                st.success(msg)
+            else:
+                st.error(f"Execution failed: {msg}")
+
+# -------------------------------------------------------------
+# INTERACTIVE TRADINGVIEW CHART WIDGET
+# -------------------------------------------------------------
+st.markdown("### 📈 Interactive TradingView Live Chart")
+if records:
+    clean_chart_symbol = chosen_record["Ticker"].replace(".NS", "").replace("-USD", "").replace("=F", "").replace("=X", "")
+    if clean_chart_symbol == "^NSEI":
+        clean_chart_symbol = "NIFTY"
+    elif clean_chart_symbol == "^NSEBANK":
+        clean_chart_symbol = "BANKNIFTY"
+
+    tv_html = f"""
+    <div class="tradingview-widget-container" style="height:550px; width:100%;">
+      <div id="tradingview_chart" style="height:550px;"></div>
+      <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
+      <script type="text/javascript">
+      new TradingView.widget(
+      {{
+        "autosize": true,
+        "symbol": "{clean_chart_symbol}",
+        "interval": "15",
+        "timezone": "Asia/Kolkata",
+        "theme": "dark",
+        "style": "1",
+        "locale": "en",
+        "toolbar_bg": "#131722",
+        "enable_publishing": false,
+        "hide_side_toolbar": false,
+        "allow_symbol_change": true,
+        "container_id": "tradingview_chart"
+      }}
+      );
+      </script>
+    </div>
+    """
+    components.html(tv_html, height=560)
