@@ -193,7 +193,7 @@ def dispatch_daily_eod_report(paper_book, daily_stats, ist_now):
 
     trades_today = [t for t in paper_book.get("trades", []) if t.get("date", "").startswith(today_str)]
     tp_hits = len([t for t in trades_today if "TP" in t.get("status", "")])
-    sl_hits = len([t for t in trades_today if t.get("status"] == "SL"])
+    sl_hits = len([t for t in trades_today if t.get("status") == "SL"])
     total_trades = len(trades_today)
     win_rate = round((tp_hits / total_trades * 100), 1) if total_trades > 0 else 0.0
     day_pnl = sum([t.get("pnl", 0) for t in trades_today])
