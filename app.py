@@ -4,90 +4,71 @@ import pandas as pd
 import ta
 import time
 
-st.set_page_config(page_title="Institutional Market Scanner", page_icon="⚡", layout="wide")
+st.set_page_config(page_title="Institutional Breakout Terminal", page_icon="⚡", layout="wide")
 
+# Custom Dark Terminal Styling
 st.markdown("""
     <style>
-    .main {background-color: #0e1117;}
-    div[data-testid="stMetricValue"] {font-size: 20px;}
+    .metric-box {
+        background-color: #1e222d;
+        padding: 12px;
+        border-radius: 8px;
+        border-left: 4px solid #00c805;
+        margin-bottom: 10px;
+    }
     </style>
 """, unsafe_allow_html=True)
 
-st.title("⚡ Pro Market Scanner & Terminal")
+st.title("⚡ Institutional Breakout Terminal")
 
 # -------------------------------------------------------------
-# MASTER WATCHLISTS
+# WATCHLIST REGISTRY
 # -------------------------------------------------------------
-INDIAN_STOCKS = [
-    "RELIANCE.NS", "TCS.NS", "INFY.NS", "HDFCBANK.NS", "ICICIBANK.NS", "SBIN.NS", "AXISBANK.NS",
-    "KOTAKBANK.NS", "LT.NS", "BHARTIARTL.NS", "ITC.NS", "HINDUNILVR.NS", "TATAMOTORS.NS", "MARUTI.NS",
-    "M&M.NS", "SUNPHARMA.NS", "CIPLA.NS", "DRREDDY.NS", "TATASTEEL.NS", "JSWSTEEL.NS", "HINDALCO.NS",
-    "TITAN.NS", "BAJFINANCE.NS", "ADANIENT.NS", "ADANIPORTS.NS", "NTPC.NS", "POWERGRID.NS", "ONGC.NS",
-    "SUZLON.NS", "IREDA.NS", "RVNL.NS", "IRFC.NS", "IRCON.NS", "RAILTEL.NS", "MAZDOCK.NS", "COCHINSHIP.NS",
-    "HAL.NS", "BEL.NS", "BDL.NS", "BHEL.NS", "HUDCO.NS", "NBCC.NS", "SAIL.NS", "NMDC.NS", "NATIONALUM.NS",
-    "BSE.NS", "CDSL.NS", "ANGELONE.NS", "MCX.NS", "TATATECH.NS", "TRENT.NS", "ZOMATO.NS", "JIOFIN.NS",
-    "DIXON.NS", "POLYCAB.NS", "KEI.NS", "KALYANKJIL.NS", "TATAPOWER.NS", "ADANIGREEN.NS", "PERSISTENT.NS",
-    "COFORGE.NS", "DLF.NS", "LODHA.NS", "AUROPHARMA.NS", "LUPIN.NS", "EXIDEIND.NS", "ASHOKLEY.NS"
-]
+WATCHLISTS = {
+    "Forex & Commodities": [
+        "GC=F", "SI=F", "CL=F", "HG=F", "INR=X", "EURUSD=X", 
+        "GBPUSD=X", "USDJPY=X", "AUDUSD=X", "USDCAD=X", "USDCHF=X", "NZDUSD=X"
+    ],
+    "Indian High-Beta Momentum": [
+        "RELIANCE.NS", "TCS.NS", "INFY.NS", "HDFCBANK.NS", "ICICIBANK.NS", "SBIN.NS",
+        "LT.NS", "BHARTIARTL.NS", "TATAMOTORS.NS", "TITAN.NS", "SUZLON.NS", "IREDA.NS",
+        "RVNL.NS", "IRFC.NS", "MAZDOCK.NS", "HAL.NS", "BEL.NS", "BSE.NS", "CDSL.NS",
+        "ZOMATO.NS", "TRENT.NS", "DIXON.NS", "POLYCAB.NS", "TATAPOWER.NS"
+    ],
+    "US Tech Giants": [
+        "NVDA", "TSLA", "AAPL", "MSFT", "AMZN", "GOOGL", "META", 
+        "AMD", "NFLX", "PLTR", "AVGO", "SMCI", "COIN", "MSTR"
+    ],
+    "Crypto (24x7)": [
+        "BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD", "BNB-USD", "DOGE-USD", "SUI-USD"
+    ]
+}
 
-US_STOCKS = [
-    "NVDA", "TSLA", "AAPL", "MSFT", "AMZN", "GOOGL", "META", "AMD", "NFLX", "PLTR",
-    "AVGO", "SMCI", "ARM", "QCOM", "INTC", "MU", "PANW", "CRWD", "COIN", "MSTR"
-]
-
-FOREX_COMMODITIES = [
-    "GC=F",      # XAUUSD
-    "SI=F",      # XAGUSD
-    "CL=F",      # Crude Oil
-    "HG=F",      # Copper
-    "INR=X",     # USD/INR
-    "EURUSD=X",  # EUR/USD
-    "GBPUSD=X",  # GBP/USD
-    "USDJPY=X",  # USD/JPY
-    "AUDUSD=X",  # AUD/USD
-    "USDCAD=X",  # USD/CAD
-    "USDCHF=X",  # USD/CHF
-    "NZDUSD=X"   # NZD/USD
-]
-
-CRYPTO = [
-    "BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD", "BNB-USD",
-    "ADA-USD", "DOGE-USD", "AVAX-USD", "LINK-USD", "SUI-USD"
-]
-
-# Top Controls Bar
-col1, col2, col3 = st.columns([2, 1, 1])
+# -------------------------------------------------------------
+# TOP BAR CONTROLS
+# -------------------------------------------------------------
+col1, col2, col3, col4 = st.columns([2, 1.2, 1, 1])
 
 with col1:
-    market_choice = st.selectbox(
-        "Market Select Karein:",
-        ["Forex & Commodities", "Indian Stocks (NSE)", "US Stocks", "Crypto (24x7)"]
-    )
+    market_choice = st.selectbox("Market Select Karein:", list(WATCHLISTS.keys()))
 
 with col2:
-    only_breakouts = st.checkbox("Sirf Live Breakouts 🔥", value=False)
+    min_rvol = st.slider("Minimum RVol (Volume Spike):", min_value=1.0, max_value=3.0, value=1.4, step=0.1)
 
 with col3:
-    auto_refresh = st.checkbox("Auto-Refresh (60s) ⏱️", value=True)
+    only_breakouts = st.checkbox("Sirf Breakouts 🔥", value=False)
 
-if market_choice == "Indian Stocks (NSE)":
-    selected_tickers = INDIAN_STOCKS
-    currency_sym = "₹"
-elif market_choice == "US Stocks":
-    selected_tickers = US_STOCKS
-    currency_sym = "$"
-elif market_choice == "Forex & Commodities":
-    selected_tickers = FOREX_COMMODITIES
-    currency_sym = ""
-else:
-    selected_tickers = CRYPTO
-    currency_sym = "$"
+with col4:
+    auto_refresh = st.checkbox("Auto-Sync (60s) ⏱️", value=True)
+
+selected_tickers = WATCHLISTS[market_choice]
+currency_sym = "₹" if "Indian" in market_choice else ("$" if market_choice in ["US Tech Giants", "Crypto (24x7)"] else "")
 
 # -------------------------------------------------------------
-# ENGINE
+# ADVANCED SCANNING LOGIC
 # -------------------------------------------------------------
 @st.cache_data(ttl=30)
-def fetch_and_scan(tickers):
+def fetch_and_scan(tickers, rvol_threshold):
     results = []
     data = yf.download(tickers, period="5d", interval="15m", group_by='ticker', progress=False)
     
@@ -104,73 +85,80 @@ def fetch_and_scan(tickers):
             vol = float(df['Volume'].iloc[-1])
             avg_vol = float(df['Volume'].iloc[-25:-1].mean()) or 1.0
 
-            rsi_series = ta.momentum.rsi(df['Close'], window=14)
-            rsi = round(float(rsi_series.dropna().iloc[-1]), 1) if not rsi_series.dropna().empty else 50.0
-
             rvol = round(vol / avg_vol, 2) if avg_vol > 0 else 1.0
             
-            # Pure Breakout Rule
-            is_breakout = (close > high_25) and (close > open_p)
+            # Indicator Calculations
+            rsi_series = ta.momentum.rsi(df['Close'], window=14)
+            rsi = round(float(rsi_series.dropna().iloc[-1]), 1) if not rsi_series.dropna().empty else 50.0
 
             atr_series = ta.volatility.average_true_range(df['High'], df['Low'], df['Close'], window=14)
             atr = float(atr_series.dropna().iloc[-1]) if not atr_series.dropna().empty else (close * 0.01)
 
+            # Breakout Conditions
+            is_breakout = (close > high_25) and (close > open_p) and (rvol >= rvol_threshold)
+
             sl = round(close - (1.0 * atr), 2 if "=" not in ticker else 4)
-            tp = round(close + (1.5 * atr), 2 if "=" not in ticker else 4)
+            tp1 = round(close + (1.5 * atr), 2 if "=" not in ticker else 4)
+            risk_unit = max(round(close - sl, 4), 0.0001)
+            suggested_qty = max(1, int(1000 / risk_unit)) if currency_sym == "₹" else max(1, int(50 / risk_unit))
 
-            # Name Mapping
-            display_name = ticker.replace(".NS", "").replace("-USD", "").replace("=F", "").replace("=X", "")
-            tv_symbol = display_name
+            # Display Formatting
+            name = ticker.replace(".NS", "").replace("-USD", "").replace("=F", "").replace("=X", "")
+            tv_sym = name
             if ticker == "GC=F":
-                display_name = "XAUUSD (Gold)"
-                tv_symbol = "GOLD"
+                name, tv_sym = "XAUUSD (Gold)", "GOLD"
             elif ticker == "SI=F":
-                display_name = "XAGUSD (Silver)"
-                tv_symbol = "SILVER"
+                name, tv_sym = "XAGUSD (Silver)", "SILVER"
             elif ticker == "CL=F":
-                display_name = "CRUDE OIL"
-                tv_symbol = "USOIL"
-
-            chart_url = f"https://in.tradingview.com/chart/?symbol={tv_symbol}"
+                name, tv_sym = "CRUDE OIL", "USOIL"
 
             results.append({
-                "Asset": display_name,
-                "Signal": "🟢 BUY BREAKOUT" if is_breakout else "⚪ WAITING",
+                "Priority": 0 if is_breakout else 1,
+                "Asset": name,
+                "Signal": "🟢 STRONG BREAKOUT" if is_breakout else "⚪ CONSOLIDATING",
                 "LTP": f"{currency_sym}{round(close, 2 if '=' not in ticker else 4)}",
-                "Stop Loss": f"{currency_sym}{sl}",
-                "Target (1:1.5)": f"{currency_sym}{tp}",
-                "RSI (14)": rsi,
-                "RVol": rvol,
-                "Chart": chart_url,
+                "Stop-Loss": f"{currency_sym}{sl}",
+                "Target (1:1.5)": f"{currency_sym}{tp1}",
+                "RVol": f"{rvol}x 🔥" if rvol >= 2.0 else f"{rvol}x",
+                "RSI": rsi,
+                "Size (~Risk Cap)": f"{suggested_qty} units",
+                "Chart": f"https://in.tradingview.com/chart/?symbol={tv_sym}",
                 "Is_Breakout": is_breakout
             })
         except Exception:
             continue
 
-    return pd.DataFrame(results)
+    df_out = pd.DataFrame(results)
+    if not df_out.empty:
+        # Breakout signals ko table me sabse upar sort karein
+        df_out = df_out.sort_values(by=["Priority", "Asset"]).drop(columns=["Priority"])
+    return df_out
 
-with st.spinner("Market Momentum Scan Ho Raha Hai..."):
-    df_results = fetch_and_scan(selected_tickers)
+with st.spinner("Market Depth & Momentum Scan Ho Raha Hai..."):
+    df_results = fetch_and_scan(selected_tickers, min_rvol)
 
 if not df_results.empty:
     if only_breakouts:
         df_results = df_results[df_results["Is_Breakout"] == True]
 
-    # Clean UI Columns
-    display_df = df_results.drop(columns=["Is_Breakout"])
+    # Quick Summary Metric Cards
+    active_breakouts = int(df_results["Is_Breakout"].sum())
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Monitored Assets", len(df_results))
+    c2.metric("Active Breakouts", active_breakouts, delta="Actionable" if active_breakouts > 0 else "Neutral")
+    c3.metric("RVol Filter Level", f"{min_rvol}x")
 
     st.dataframe(
-        display_df,
+        df_results.drop(columns=["Is_Breakout"]),
         column_config={
-            "Chart": st.column_config.LinkColumn("TradingView", display_text="Open Chart ↗")
+            "Chart": st.column_config.LinkColumn("Chart", display_text="TradingView ↗")
         },
         use_container_width=True,
-        height=620
+        height=580
     )
 else:
-    st.info("Market data fetch ho raha hai, kripya thoda wait karein.")
+    st.info("Market data fetch ho raha hai ya market closed hai. Kripya refresh karein.")
 
-# Auto-Refresh Logic
 if auto_refresh:
     time.sleep(60)
     st.rerun()
