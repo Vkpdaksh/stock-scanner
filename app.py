@@ -3,180 +3,296 @@ import yfinance as yf
 import pandas as pd
 import ta
 import time
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
-st.set_page_config(page_title="Institutional Breakout & Option Terminal", page_icon="⚡", layout="wide")
+st.set_page_config(page_title="Institutional Trading Terminal", page_icon="⚡", layout="wide")
 
 st.markdown("""
     <style>
-    .main {background-color: #0e1117;}
-    div[data-testid="stMetricValue"] {font-size: 20px;}
+    .main {background-color: #0b0e14;}
+    div[data-testid="stMetricValue"] {font-size: 22px; font-weight: 700;}
+    .reportview-container .main .block-container {padding-top: 1.5rem;}
     </style>
 """, unsafe_allow_html=True)
 
-st.title("⚡ Pro Market Scanner & Index Option Terminal")
+st.title("⚡ Institutional Grade Trading Terminal")
 
 # -------------------------------------------------------------
-# WATCHLIST REGISTRY
+# UNIVERSE & BENCHMARKS
 # -------------------------------------------------------------
 WATCHLISTS = {
     "⚡ Index Options (Nifty & Bank Nifty)": ["^NSEI", "^NSEBANK", "NIFTY_FIN_SERVICE.NS"],
-    "Major Indices (Global)": ["^IXIC", "^GSPC", "^DJI", "^CNXIT", "^CNXAUTO", "^CNXMETAL"],
+    "Major Indices (Global & Sectors)": ["^NSEI", "^NSEBANK", "^CNXIT", "^CNXAUTO", "^CNXMETAL", "^IXIC", "^GSPC"],
     "Forex & Commodities": ["GC=F", "SI=F", "CL=F", "HG=F", "INR=X", "EURUSD=X", "GBPUSD=X", "USDJPY=X"],
-    "Indian Stocks (NSE)": [
+    "Indian High-Beta Leaders": [
         "RELIANCE.NS", "TCS.NS", "INFY.NS", "HDFCBANK.NS", "ICICIBANK.NS", "SBIN.NS",
         "TATAMOTORS.NS", "TITAN.NS", "SUZLON.NS", "IREDA.NS", "RVNL.NS", "HAL.NS", "BEL.NS", "ZOMATO.NS"
     ],
-    "US Tech Giants": ["NVDA", "TSLA", "AAPL", "MSFT", "AMZN", "META", "GOOGL", "PLTR", "COIN"],
+    "US Momentum Tech": ["NVDA", "TSLA", "AAPL", "MSFT", "AMZN", "META", "GOOGL", "PLTR", "COIN"],
     "Crypto (24x7)": ["BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD", "DOGE-USD"]
 }
 
-# Top Controls
-col1, col2, col3 = st.columns([2, 1, 1])
-
-with col1:
-    market_choice = st.selectbox("Market Segment Chunein:", list(WATCHLISTS.keys()))
-
-with col2:
-    risk_budget = st.number_input("Max Risk Per Option Trade (₹):", min_value=500, max_value=50000, value=1500, step=500)
-
-with col3:
-    auto_refresh = st.checkbox("Auto-Sync (60s) ⏱️", value=True)
+NAME_MAP = {
+    "^NSEI": "NIFTY 50",
+    "^NSEBANK": "BANK NIFTY",
+    "NIFTY_FIN_SERVICE.NS": "FIN NIFTY",
+    "^CNXIT": "NIFTY IT",
+    "^CNXAUTO": "NIFTY AUTO",
+    "^CNXMETAL": "NIFTY METAL",
+    "^IXIC": "NASDAQ 100",
+    "^GSPC": "S&P 500",
+    "GC=F": "XAUUSD (Gold)",
+    "SI=F": "XAGUSD (Silver)",
+    "CL=F": "CRUDE OIL",
+    "HG=F": "COPPER"
+}
 
 # -------------------------------------------------------------
-# OPTION STRIKE CALCULATOR HELPER
+# TOP CONTROLS & RISK DESK
+# -------------------------------------------------------------
+ctrl_c1, ctrl_c2, ctrl_c3, ctrl_c4 = st.columns([2, 1.2, 1, 1])
+
+with ctrl_c1:
+    market_choice = st.selectbox("Active Asset Universe:", list(WATCHLISTS.keys()))
+
+with ctrl_c2:
+    risk_budget = st.number_input("Max Risk Per Position (₹ / $):", min_value=500, max_value=50000, value=1500, step=500)
+
+with ctrl_c3:
+    sound_alert = st.checkbox("Audio Chime 🔔", value=True)
+
+with ctrl_c4:
+    auto_refresh = st.checkbox("Auto-Sync (60s) ⏱️", value=True)
+
+selected_tickers = WATCHLISTS[market_choice]
+
+# -------------------------------------------------------------
+# OPTION STRIKE ENGINE
 # -------------------------------------------------------------
 def get_atm_strike(index_name, spot_price):
     if "NIFTY 50" in index_name:
-        step = 50
-        lot_size = 25  # Latest Nifty contract lot size
+        step, lot_size = 50, 25
     elif "BANK NIFTY" in index_name:
-        step = 100
-        lot_size = 15  # Latest Bank Nifty lot size
+        step, lot_size = 100, 15
     else:
-        step = 50
-        lot_size = 40
+        step, lot_size = 50, 40
     atm_strike = int(round(spot_price / step) * step)
     return atm_strike, lot_size
 
 # -------------------------------------------------------------
-# SCANNER LOGIC
+# INSTITUTIONAL BATCH SCAN ENGINE
 # -------------------------------------------------------------
 @st.cache_data(ttl=30)
-def fetch_and_scan(tickers, market_type, risk_amount):
+def execute_institutional_scan(tickers, market_type, risk_amount):
     results = []
-    data = yf.download(tickers, period="5d", interval="15m", group_by='ticker', progress=False)
-    
+    # Batch pull 15-minute execution timeframe
+    data_15m = yf.download(tickers, period="5d", interval="15m", group_by='ticker', progress=False)
+
     for ticker in tickers:
         try:
-            df = data[ticker] if len(tickers) > 1 else data
-            df = df.dropna()
-            if len(df) < 25:
+            df_15m = data_15m[ticker] if len(tickers) > 1 else data_15m
+            df_15m = df_15m.dropna()
+            if len(df_15m) < 25:
                 continue
 
-            close = float(df['Close'].iloc[-1])
-            open_p = float(df['Open'].iloc[-1])
-            high_25 = float(df['High'].iloc[-25:-1].max())
-            low_25 = float(df['Low'].iloc[-25:-1].min())
-            vol = float(df['Volume'].iloc[-1])
-            avg_vol = float(df['Volume'].iloc[-25:-1].mean()) or 1.0
-
+            c_close = float(df_15m['Close'].iloc[-1])
+            c_open = float(df_15m['Open'].iloc[-1])
+            prev_window = df_15m.iloc[-25:-1]
+            res_level = float(prev_window['High'].max())
+            sup_level = float(prev_window['Low'].min())
+            
+            vol = float(df_15m['Volume'].iloc[-1])
+            avg_vol = float(prev_window['Volume'].mean()) or 1.0
             rvol = round(vol / avg_vol, 2) if avg_vol > 0 else 1.0
 
-            atr_series = ta.volatility.average_true_range(df['High'], df['Low'], df['Close'], window=14)
-            atr = float(atr_series.dropna().iloc[-1]) if not atr_series.dropna().empty else (close * 0.005)
+            # Volatility & Momentum
+            atr_s = ta.volatility.average_true_range(df_15m['High'], df_15m['Low'], df_15m['Close'], window=14)
+            atr = float(atr_s.dropna().iloc[-1]) if not atr_s.dropna().empty else (c_close * 0.005)
 
-            rsi_series = ta.momentum.rsi(df['Close'], window=14)
-            rsi = round(float(rsi_series.dropna().iloc[-1]), 1) if not rsi_series.dropna().empty else 50.0
+            rsi_s = ta.momentum.rsi(df_15m['Close'], window=14)
+            rsi = round(float(rsi_s.dropna().iloc[-1]), 1) if not rsi_s.dropna().empty else 50.0
 
-            # Signal Check: Bullish Breakout vs Bearish Breakdown
-            is_bullish = (close > high_25) and (close > open_p)
-            is_bearish = (close < low_25) and (close < open_p)
+            ema20_s = ta.trend.ema_indicator(df_15m['Close'], window=20)
+            ema20 = float(ema20_s.dropna().iloc[-1])
 
-            # Name mapping
-            name_map = {
-                "^NSEI": "NIFTY 50",
-                "^NSEBANK": "BANK NIFTY",
-                "NIFTY_FIN_SERVICE.NS": "FIN NIFTY",
-                "GC=F": "XAUUSD (Gold)",
-                "SI=F": "XAGUSD (Silver)",
-                "CL=F": "CRUDE OIL"
-            }
-            name = name_map.get(ticker, ticker.replace(".NS", "").replace("-USD", "").replace("=F", "").replace("=X", ""))
+            # Multi-Timeframe Checks
+            is_index_or_fx = ("^" in ticker or "=" in ticker or "Index" in market_type)
+            vol_passed = True if is_index_or_fx else (rvol >= 1.4)
+            trend_passed = c_close >= ema20
 
-            # Option Specific Mode
+            bullish_breakout = (c_close > res_level) and (c_close > c_open) and vol_passed and trend_passed
+            bearish_breakdown = (c_close < sup_level) and (c_close < c_open) and vol_passed and (c_close < ema20)
+
+            name = NAME_MAP.get(ticker, ticker.replace(".NS", "").replace("-USD", "").replace("=F", "").replace("=X", ""))
+
             if "Index Options" in market_type:
-                atm_strike, lot_size = get_atm_strike(name, close)
-                
-                # Approximate Delta = 0.5 for ATM option
-                opt_atr_pts = round(atr * 0.5, 1)
-                opt_sl_pts = max(round(opt_atr_pts * 0.8, 1), 15.0)  # Standard points SL
-                opt_target_pts = round(opt_sl_pts * 1.8, 1)          # 1:1.8 Risk:Reward
+                atm_strike, lot_size = get_atm_strike(name, c_close)
+                opt_sl_pts = max(round(atr * 0.4, 1), 15.0)
+                opt_tp_pts = round(opt_sl_pts * 1.8, 1)
+                risk_lot = opt_sl_pts * lot_size
+                rec_lots = max(1, int(risk_amount / risk_lot))
 
-                risk_per_lot = opt_sl_pts * lot_size
-                recommended_lots = max(1, int(risk_amount / risk_per_lot))
-
-                if is_bullish:
+                if bullish_breakout:
                     signal = f"🟢 BUY {atm_strike} CE"
-                    priority = 0
-                elif is_bearish:
+                    score = "💎 Grade A+"
+                    prio = 0
+                elif bearish_breakdown:
                     signal = f"🔴 BUY {atm_strike} PE"
-                    priority = 0
+                    score = "💎 Grade A+"
+                    prio = 0
                 else:
-                    signal = "⚪ NO SETUP (RANGE)"
-                    priority = 1
+                    signal = "⚪ CONSOLIDATION"
+                    score = "Neutral"
+                    prio = 1
 
                 results.append({
-                    "Priority": priority,
-                    "Index": name,
-                    "Spot LTP": round(close, 2),
-                    "Actionable Option": signal,
-                    "Option SL": f"-{opt_sl_pts} pts",
-                    "Option Target": f"+{opt_target_pts} pts",
-                    "Recommended Lots": f"{recommended_lots} Lot ({recommended_lots * lot_size} Qty)",
-                    "Max Risk": f"₹{int(risk_per_lot * recommended_lots)}",
+                    "Priority": prio,
+                    "Asset": name,
+                    "Signal": signal,
+                    "Setup Grade": score,
+                    "Spot Price": round(c_close, 2),
+                    "Opt SL": f"-{opt_sl_pts} pts",
+                    "Opt Target": f"+{opt_tp_pts} pts",
+                    "Lot Allocation": f"{rec_lots} Lot ({rec_lots * lot_size} Qty)",
+                    "Capital At Risk": f"₹{int(risk_lot * rec_lots)}",
                     "RSI": rsi,
-                    "Chart": f"https://in.tradingview.com/chart/?symbol={name.replace(' ', '')}"
+                    "Ticker_Raw": ticker,
+                    "Is_Actionable": prio == 0
                 })
             else:
-                # Regular Equity/Forex Mode
-                sl = round(close - (1.0 * atr), 2 if "=" not in ticker else 4)
-                tp = round(close + (1.5 * atr), 2 if "=" not in ticker else 4)
-                currency = "₹" if ".NS" in ticker or ticker == "^NSEI" else "$"
-                
+                sl = round(c_close - (1.1 * atr), 2 if "=" not in ticker else 4)
+                tp = round(c_close + (1.65 * atr), 2 if "=" not in ticker else 4)
+                curr_sym = "₹" if ".NS" in ticker else ("$" if market_type in ["US Momentum Tech", "Crypto (24x7)"] else "")
+
+                if bullish_breakout:
+                    signal = "🟢 STRONG BUY"
+                    score = "💎 Grade A+" if (rvol >= 2.0 or is_index_or_fx) else "🔥 Grade A"
+                    prio = 0
+                else:
+                    signal = "⚪ CONSOLIDATION"
+                    score = "Neutral"
+                    prio = 1
+
+                risk_per_unit = max(round(c_close - sl, 4), 0.0001)
+                alloc_qty = max(1, int(risk_amount / risk_per_unit))
+
                 results.append({
-                    "Priority": 0 if is_bullish else 1,
+                    "Priority": prio,
                     "Asset": name,
-                    "Signal": "🟢 BUY BREAKOUT" if is_bullish else "⚪ CONSOLIDATION",
-                    "LTP": f"{currency}{round(close, 2 if '=' not in ticker else 4)}",
-                    "Stop-Loss": f"{currency}{sl}",
-                    "Target": f"{currency}{tp}",
+                    "Signal": signal,
+                    "Setup Grade": score,
+                    "LTP": f"{curr_sym}{round(c_close, 2 if '=' not in ticker else 4)}",
+                    "Stop Loss": f"{curr_sym}{sl}",
+                    "Target (1:1.5)": f"{curr_sym}{tp}",
+                    "RVol": f"{rvol}x 🔥" if rvol >= 2.0 else (f"{rvol}x" if not is_index_or_fx else "Liquid"),
                     "RSI": rsi,
-                    "RVol": f"{rvol}x",
-                    "Chart": f"https://in.tradingview.com/chart/?symbol={name.replace(' ', '')}"
+                    "Recommended Size": f"{alloc_qty} Units",
+                    "Ticker_Raw": ticker,
+                    "Is_Actionable": prio == 0
                 })
         except Exception:
             continue
 
-    df_out = pd.DataFrame(results)
-    if not df_out.empty:
-        df_out = df_out.sort_values(by=["Priority"]).drop(columns=["Priority"])
-    return df_out
+    df = pd.DataFrame(results)
+    if not df.empty:
+        df = df.sort_values(by=["Priority"]).drop(columns=["Priority"])
+    return df
 
-with st.spinner("Index Levels & Option Strike Analysis Chalu Hai..."):
-    df_results = fetch_and_scan(WATCHLISTS[market_choice], market_choice, risk_budget)
+with st.spinner("Analyzing institutional price action & volatility..."):
+    df_terminal = execute_institutional_scan(selected_tickers, market_choice, risk_budget)
 
-if not df_results.empty:
-    st.dataframe(
-        df_results,
-        column_config={
-            "Chart": st.column_config.LinkColumn("TradingView", display_text="Open Chart ↗")
-        },
-        use_container_width=True,
-        height=550
-    )
+if not df_terminal.empty:
+    actionable_count = int(df_terminal["Is_Actionable"].sum())
+
+    if sound_alert and actionable_count > 0:
+        st.markdown("""
+            <audio autoplay>
+                <source src="https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3" type="audio/mpeg">
+            </audio>
+        """, unsafe_allow_html=True)
+
+    # Top Analytics Cards
+    stat1, stat2, stat3 = st.columns(3)
+    stat1.metric("Universe Tracked", len(df_terminal))
+    stat2.metric("Institutional Breakouts", actionable_count, delta="Execution Ready" if actionable_count > 0 else "Neutral")
+    stat3.metric("Segment", market_choice)
+
+    # Clean Table Render
+    display_table = df_terminal.drop(columns=["Ticker_Raw", "Is_Actionable"])
+    st.dataframe(display_table, use_container_width=True, height=360)
+
+    # -------------------------------------------------------------
+    # EMBEDDED INTERACTIVE CANDLESTICK CHART DESK
+    # -------------------------------------------------------------
+    st.markdown("---")
+    chart_col1, chart_col2 = st.columns([1.5, 3.5])
+
+    with chart_col1:
+        st.subheader("🔍 Deep Chart Inspection")
+        asset_names = df_terminal["Asset"].tolist()
+        selected_asset = st.selectbox("Inspect Asset Candles:", asset_names)
+        raw_ticker = df_terminal.loc[df_terminal["Asset"] == selected_asset, "Ticker_Raw"].iloc[0]
+
+        # Quick stats for inspect box
+        st.info(f"Viewing real-time multi-session chart for **{selected_asset}** with 20 EMA, 50 EMA and RSI Momentum sub-panel.")
+
+    with chart_col2:
+        try:
+            candle_df = yf.download(raw_ticker, period="5d", interval="15m", progress=False)
+            if isinstance(candle_df.columns, pd.MultiIndex):
+                candle_df.columns = [c[0] for c in candle_df.columns]
+            candle_df = candle_df.dropna()
+
+            candle_df['EMA20'] = ta.trend.ema_indicator(candle_df['Close'], window=20)
+            candle_df['EMA50'] = ta.trend.ema_indicator(candle_df['Close'], window=50)
+            candle_df['RSI'] = ta.momentum.rsi(candle_df['Close'], window=14)
+
+            # Interactive Plotly Subplots
+            fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.04, row_heights=[0.75, 0.25])
+
+            fig.add_trace(go.Candlestick(
+                x=candle_df.index,
+                open=candle_df['Open'], high=candle_df['High'],
+                low=candle_df['Low'], close=candle_df['Close'],
+                name="Candles"
+            ), row=1, col=1)
+
+            fig.add_trace(go.Scatter(
+                x=candle_df.index, y=candle_df['EMA20'],
+                line=dict(color='#00e5ff', width=1.5),
+                name="20 EMA (Execution)"
+            ), row=1, col=1)
+
+            fig.add_trace(go.Scatter(
+                x=candle_df.index, y=candle_df['EMA50'],
+                line=dict(color='#ffab00', width=1.5),
+                name="50 EMA (Trend Anchor)"
+            ), row=1, col=1)
+
+            fig.add_trace(go.Scatter(
+                x=candle_df.index, y=candle_df['RSI'],
+                line=dict(color='#e040fb', width=1.5),
+                name="RSI (14)"
+            ), row=2, col=1)
+
+            fig.add_hline(y=70, line_dash="dash", line_color="gray", row=2, col=1)
+            fig.add_hline(y=30, line_dash="dash", line_color="gray", row=2, col=1)
+
+            fig.update_layout(
+                height=520,
+                margin=dict(l=10, r=10, t=25, b=10),
+                template="plotly_dark",
+                xaxis_rangeslider_visible=False,
+                showlegend=True
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        except Exception:
+            st.warning("Chart data render failed. Please select another asset.")
 else:
-    st.info("Market data load ho raha hai. Thoda wait karein.")
+    st.info("Market data syncing. Please wait a moment.")
 
+# Auto refresh handler
 if auto_refresh:
     time.sleep(60)
     st.rerun()
