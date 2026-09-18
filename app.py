@@ -2,13 +2,21 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import ta
+import time
 
-st.set_page_config(page_title="Pro Market Scanner", page_icon="⚡", layout="wide")
+st.set_page_config(page_title="Institutional Market Scanner", page_icon="⚡", layout="wide")
 
-st.title("⚡ Pro Market Scanner")
+st.markdown("""
+    <style>
+    .main {background-color: #0e1117;}
+    div[data-testid="stMetricValue"] {font-size: 20px;}
+    </style>
+""", unsafe_allow_html=True)
+
+st.title("⚡ Pro Market Scanner & Terminal")
 
 # -------------------------------------------------------------
-# COMPLETE WATCHLISTS
+# MASTER WATCHLISTS
 # -------------------------------------------------------------
 INDIAN_STOCKS = [
     "RELIANCE.NS", "TCS.NS", "INFY.NS", "HDFCBANK.NS", "ICICIBANK.NS", "SBIN.NS", "AXISBANK.NS",
@@ -28,12 +36,10 @@ US_STOCKS = [
 ]
 
 FOREX_COMMODITIES = [
-    # Gold & Silver (Global Liquid Benchmarks)
-    "GC=F",      # XAU/USD (Gold)
-    "SI=F",      # XAG/USD (Silver)
-    "CL=F",      # Crude Oil WTI
+    "GC=F",      # XAUUSD
+    "SI=F",      # XAGUSD
+    "CL=F",      # Crude Oil
     "HG=F",      # Copper
-    # 8 Major Global Currencies
     "INR=X",     # USD/INR
     "EURUSD=X",  # EUR/USD
     "GBPUSD=X",  # GBP/USD
@@ -49,13 +55,20 @@ CRYPTO = [
     "ADA-USD", "DOGE-USD", "AVAX-USD", "LINK-USD", "SUI-USD"
 ]
 
-# Market Selection
-market_choice = st.selectbox(
-    "Market Select Karein:",
-    ["Forex & Commodities", "Indian Stocks (NSE)", "US Stocks", "Crypto (24x7)"]
-)
+# Top Controls Bar
+col1, col2, col3 = st.columns([2, 1, 1])
 
-only_breakouts = st.checkbox("Sirf Live Breakout Signals Dikhayein 🔥")
+with col1:
+    market_choice = st.selectbox(
+        "Market Select Karein:",
+        ["Forex & Commodities", "Indian Stocks (NSE)", "US Stocks", "Crypto (24x7)"]
+    )
+
+with col2:
+    only_breakouts = st.checkbox("Sirf Live Breakouts 🔥", value=False)
+
+with col3:
+    auto_refresh = st.checkbox("Auto-Refresh (60s) ⏱️", value=True)
 
 if market_choice == "Indian Stocks (NSE)":
     selected_tickers = INDIAN_STOCKS
@@ -71,9 +84,9 @@ else:
     currency_sym = "$"
 
 # -------------------------------------------------------------
-# SCANNER LOGIC
+# ENGINE
 # -------------------------------------------------------------
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=30)
 def fetch_and_scan(tickers):
     results = []
     data = yf.download(tickers, period="5d", interval="15m", group_by='ticker', progress=False)
@@ -96,7 +109,7 @@ def fetch_and_scan(tickers):
 
             rvol = round(vol / avg_vol, 2) if avg_vol > 0 else 1.0
             
-            # Breakout Condition: Price clears 25-candle resistance
+            # Pure Breakout Rule
             is_breakout = (close > high_25) and (close > open_p)
 
             atr_series = ta.volatility.average_true_range(df['High'], df['Low'], df['Close'], window=14)
@@ -105,25 +118,30 @@ def fetch_and_scan(tickers):
             sl = round(close - (1.0 * atr), 2 if "=" not in ticker else 4)
             tp = round(close + (1.5 * atr), 2 if "=" not in ticker else 4)
 
-            # Clean Display Names
+            # Name Mapping
             display_name = ticker.replace(".NS", "").replace("-USD", "").replace("=F", "").replace("=X", "")
+            tv_symbol = display_name
             if ticker == "GC=F":
                 display_name = "XAUUSD (Gold)"
+                tv_symbol = "GOLD"
             elif ticker == "SI=F":
                 display_name = "XAGUSD (Silver)"
+                tv_symbol = "SILVER"
             elif ticker == "CL=F":
                 display_name = "CRUDE OIL"
+                tv_symbol = "USOIL"
 
-            signal_text = "🟢 BUY BREAKOUT" if is_breakout else "⚪ WAITING"
+            chart_url = f"https://in.tradingview.com/chart/?symbol={tv_symbol}"
 
             results.append({
                 "Asset": display_name,
-                "Signal": signal_text,
+                "Signal": "🟢 BUY BREAKOUT" if is_breakout else "⚪ WAITING",
                 "LTP": f"{currency_sym}{round(close, 2 if '=' not in ticker else 4)}",
-                "SL": f"{currency_sym}{sl}",
-                "Target": f"{currency_sym}{tp}",
-                "RSI": rsi,
+                "Stop Loss": f"{currency_sym}{sl}",
+                "Target (1:1.5)": f"{currency_sym}{tp}",
+                "RSI (14)": rsi,
                 "RVol": rvol,
+                "Chart": chart_url,
                 "Is_Breakout": is_breakout
             })
         except Exception:
@@ -131,13 +149,28 @@ def fetch_and_scan(tickers):
 
     return pd.DataFrame(results)
 
-with st.spinner("Market Data Scan Ho Raha Hai..."):
+with st.spinner("Market Momentum Scan Ho Raha Hai..."):
     df_results = fetch_and_scan(selected_tickers)
 
 if not df_results.empty:
     if only_breakouts:
         df_results = df_results[df_results["Is_Breakout"] == True]
-    
-    st.dataframe(df_results.drop(columns=["Is_Breakout"]), use_container_width=True, height=620)
+
+    # Clean UI Columns
+    display_df = df_results.drop(columns=["Is_Breakout"])
+
+    st.dataframe(
+        display_df,
+        column_config={
+            "Chart": st.column_config.LinkColumn("TradingView", display_text="Open Chart ↗")
+        },
+        use_container_width=True,
+        height=620
+    )
 else:
-    st.info("Data load ho raha hai, kripya page refresh karein.")
+    st.info("Market data fetch ho raha hai, kripya thoda wait karein.")
+
+# Auto-Refresh Logic
+if auto_refresh:
+    time.sleep(60)
+    st.rerun()
