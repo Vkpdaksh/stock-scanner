@@ -88,7 +88,7 @@ NSE_UNIVERSE = [
     "COFORGE.NS", "DLF.NS", "LODHA.NS", "AUROPHARMA.NS", "LUPIN.NS", "EXIDEIND.NS", "ASHOKLEY.NS"
 ]
 
-# MASTER WATCHLIST (TOTAL ~115 HIGH VOLUME ACTIVE ASSETS)
+# MASTER WATCHLIST
 FULL_WATCHLIST = COMMODITIES + FOREX_PAIRS + CRYPTO_ASSETS + US_TECH + INDICES + NSE_UNIVERSE
 
 # Clean Names for Alerts
@@ -355,11 +355,9 @@ def run_batch_market_scan(sent_cache, active_trades):
                     res_level = float(prev_window['High'].max())
                     avg_vol = float(prev_window['Volume'].mean()) or 1.0
 
-                    # 15m Breakout Check
                     if c_close <= res_level or c_close <= c_open:
                         continue
 
-                    # Strict Volume on Equities, Bypass for Commodities & Forex
                     is_forex_or_comm = ("=" in ticker or "^" in ticker)
                     rvol = (c_vol / avg_vol) if avg_vol > 0 else 1.0
                     
@@ -369,7 +367,6 @@ def run_batch_market_scan(sent_cache, active_trades):
                     if ".NS" in ticker and not breadth_ok and rvol < 2.5:
                         continue
 
-                    # Daily Validation
                     df_d = yf.download(ticker, period="3mo", interval="1d", progress=False)
                     if df_d.empty or len(df_d) < 20:
                         continue
@@ -453,18 +450,23 @@ def run_batch_market_scan(sent_cache, active_trades):
         time.sleep(1)
 
 # -------------------------------------------------------------
-# MAIN ENGINE
+# MAIN ENGINE WITH SLEEP GUARD (11:00 PM IST CUTOFF)
 # -------------------------------------------------------------
 if __name__ == "__main__":
     ist_now = get_ist_time()
     today_str = ist_now.strftime("%Y-%m-%d")
+
+    # SLEEP GUARD: Raat 11:00 PM (23:00) ke baad scanning & alerts band
+    if ist_now.hour >= 23 or ist_now.hour < 8:
+        print(f"[{ist_now.strftime('%H:%M IST')}] Market hours ended or night cutoff active (11:00 PM - 8:00 AM). Sleeping...")
+        exit(0)
 
     cache_data = load_json(CACHE_FILE, {"date": today_str, "tickers": []})
     sent_cache = set(cache_data.get("tickers", [])) if cache_data.get("date") == today_str else set()
     active_trades = load_json(ACTIVE_TRADES_FILE, {})
     daily_stats = load_json(DAILY_STATS_FILE, {})
 
-    # 1. Pre-Market Briefing
+    # 1. Pre-Market Briefing (8:45 AM)
     run_premarket_briefing_if_due(daily_stats, ist_now)
 
     # 2. Active Trades Management
@@ -473,7 +475,7 @@ if __name__ == "__main__":
     # 3. Master Watchlist Scan
     run_batch_market_scan(sent_cache, active_trades)
 
-    # 4. End-of-Day Summary
+    # 4. End-of-Day Summary (4:00 PM)
     run_eod_summary_if_due(daily_stats, ist_now)
 
     # 5. Save States
