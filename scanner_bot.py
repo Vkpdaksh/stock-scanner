@@ -286,7 +286,24 @@ def monitor_active_trades(active_trades, daily_stats, paper_book, today_str):
 # DYNAMIC SCANNER ENGINE (BEGINNER VS PRO)
 # -------------------------------------------------------------
 def run_dynamic_scan(sent_cache, active_trades, daily_stats, paper_book, system_config, ist_now):
-    today_str = ist_now.strftime("%Y-%m-%d")
+    # -------------------------------------------------------------
+    # STRICT MARKET HOURS CHECK (09:15 AM to 03:15 PM IST, Mon-Fri)
+    # -------------------------------------------------------------
+    is_weekday = ist_now.weekday() < 5  # Monday to Friday
+    is_market_hours = (
+        is_weekday and 
+        (
+            (ist_now.hour == 9 and ist_now.minute >= 15) or 
+            (10 <= ist_now.hour < 15) or 
+            (ist_now.hour == 15 and ist_now.minute < 15)
+        )
+    )
+
+    # Agar market band hai, toh Indian scan turant rok do
+    if not is_market_hours:
+        print(f"[{ist_now.strftime('%H:%M IST')}] Market closed. Skipping Indian breakout scans.")
+        return
+    # -------------------------------------------------------------today_str = ist_now.strftime("%Y-%m-%d")
     is_beginner = (system_config.get("mode") == "Beginner (Safe)")
     max_trades = 3 if is_beginner else 999
 
