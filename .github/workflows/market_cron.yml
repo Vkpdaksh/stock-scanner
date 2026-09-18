@@ -21,7 +21,7 @@ jobs:
       - name: Install Required Libraries
         run: |
           pip install --upgrade pip
-          pip install smartapi-python pyotp pandas ta yfinance
+          pip install smartapi-python pyotp pandas ta yfinance requests matplotlib
 
       - name: Run Market Scanner Bot
         env:
