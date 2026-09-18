@@ -38,7 +38,7 @@ def save_json(filepath, data):
 
 # Load or initialize persistent configs
 system_config = load_json(CONFIG_FILE, {"mode": "Beginner (Safe)", "execution": "Paper Trading"})
-paper_data = load_json(PAPER_TRADES_FILE, {"balance": 100000, "trades": []})
+paper_data = load_json(PAPER_TRADES_FILE, {"balance": 10000, "trades": []})
 
 # -------------------------------------------------------------
 # 2. ANGEL ONE SMARTAPI SESSION & ORDER FUNCTION
@@ -214,7 +214,7 @@ st.caption(f"Status: **{session_text}** | Live Feed: **{time_str}** | Profile: *
 # 5. VIRTUAL PAPER TRADING PORTFOLIO (1 LAKH CAPITAL)
 # -------------------------------------------------------------
 st.markdown("### 💼 Virtual Paper Trading Portfolio (₹1,00,000 Learning Fund)")
-total_pnl = paper_data.get("balance", 100000) - 100000
+total_pnl = paper_data.get("balance", 10000) - 10000
 trades_count = len(paper_data.get("trades", []))
 
 p1, p2, p3 = st.columns(3)
