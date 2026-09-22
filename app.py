@@ -23,17 +23,9 @@ CONFIG_FILE = "system_mode.json"
 PAPER_TRADES_FILE = "paper_trades.json"
 EOD_FLAG_FILE = "eod_sent_flag.json"
 
-# Safe Secrets Retrieval to prevent NameError / FileNotFoundError
-def get_secret(key_name):
-    try:
-        if hasattr(st, "secrets") and key_name in st.secrets:
-            return str(st.secrets[key_name])
-    except Exception:
-        pass
-    return os.environ.get(key_name, "")
-
-TELEGRAM_BOT_TOKEN = get_secret("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = get_secret("TELEGRAM_CHAT_ID")
+# Permanent Hardcoded Credentials (Zero Dependency on Secrets)
+TELEGRAM_BOT_TOKEN = "8732059380:AAGF7qoak6yPiI5ToYGPLSVQQM4GChhKriI"
+TELEGRAM_CHAT_ID = "1527960238"
 
 def load_json(filepath, default):
     if os.path.exists(filepath):
@@ -59,16 +51,10 @@ def get_ist_now():
     return datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
 
 def send_telegram_msg(msg_text):
-    token = get_secret("TELEGRAM_BOT_TOKEN")
-    chat_id = get_secret("TELEGRAM_CHAT_ID")
-    
-    if not token or not chat_id:
-        return False, "Bot Token ya Chat ID missing hai! Streamlit Cloud Settings -> Secrets check karein."
-    
     try:
-        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
         payload = {
-            "chat_id": chat_id,
+            "chat_id": TELEGRAM_CHAT_ID,
             "text": msg_text,
             "parse_mode": "HTML"
         }
@@ -82,55 +68,7 @@ def send_telegram_msg(msg_text):
         return False, f"Error: {str(e)}"
 
 # -------------------------------------------------------------
-# 2. ANGEL ONE SMARTAPI SESSION & ORDER FUNCTION
-# -------------------------------------------------------------
-ANGEL_API_KEY = get_secret("ANGEL_API_KEY")
-ANGEL_CLIENT_ID = get_secret("ANGEL_CLIENT_ID")
-ANGEL_MPIN = get_secret("ANGEL_MPIN")
-ANGEL_TOTP_KEY = get_secret("ANGEL_TOTP_KEY")
-
-@st.cache_resource(ttl=3600)
-def get_smartapi_session():
-    if not (ANGEL_API_KEY and ANGEL_CLIENT_ID and ANGEL_MPIN and ANGEL_TOTP_KEY):
-        return None
-    try:
-        import pyotp
-        from SmartApi import SmartConnect
-        totp = pyotp.TOTP(ANGEL_TOTP_KEY).now()
-        smart_api = SmartConnect(api_key=ANGEL_API_KEY)
-        session_data = smart_api.generateSession(ANGEL_CLIENT_ID, ANGEL_MPIN, totp)
-        if session_data.get("status"):
-            return smart_api
-    except Exception:
-        pass
-    return None
-
-def place_order_smartapi(symbol_token, trading_symbol, exchange, qty, transaction_type, price=0):
-    api = get_smartapi_session()
-    if not api:
-        return False, "SmartAPI session inactive. Check secrets."
-    try:
-        order_params = {
-            "variety": "NORMAL",
-            "tradingsymbol": trading_symbol,
-            "symboltoken": str(symbol_token),
-            "transactiontype": transaction_type,
-            "ordertype": "LIMIT" if price > 0 else "MARKET",
-            "price": str(price) if price > 0 else "0",
-            "producttype": "INTRADAY",
-            "duration": "DAY",
-            "quantity": str(qty),
-            "exchange": exchange
-        }
-        res = api.placeOrder(order_params)
-        if res.get("status"):
-            return True, f"Order Executed! Order ID: {res.get('data', {}).get('orderid')}"
-        return False, res.get("message", "Order rejected by broker.")
-    except Exception as e:
-        return False, str(e)
-
-# -------------------------------------------------------------
-# 3. WATCHLISTS & SECTOR INDICES (ALL 80 BLUECHIPS + INDICES)
+# 2. WATCHLISTS & SECTOR INDICES (ALL 80 BLUECHIPS + INDICES)
 # -------------------------------------------------------------
 SECTOR_INDICES = {
     "NIFTY BANK": "^NSEBANK",
@@ -212,7 +150,7 @@ def calculate_vwap(df):
     return (typical_price * vol).cumsum() / vol.cumsum()
 
 # -------------------------------------------------------------
-# 4. TOP HEADER & PROFILE SWITCHER
+# 3. TOP HEADER & PROFILE SWITCHER
 # -------------------------------------------------------------
 st.title("⚡ Institutional Grade Trading Terminal")
 
@@ -236,16 +174,8 @@ with col_mode:
 is_beginner = (selected_mode == "Beginner (Safe)")
 
 with col_exec:
-    if is_beginner:
-        st.selectbox("Execution Route:", ["Virtual Paper Trading (Locked)"], disabled=True)
-        execution_type = "Paper Trading"
-    else:
-        selected_execution = st.selectbox(
-            "Execution Route:",
-            ["Real Fund (SmartAPI)", "Virtual Paper Trading"],
-            index=0 if system_config.get("execution") == "Real Fund (SmartAPI)" else 1
-        )
-        execution_type = "SmartAPI" if "SmartAPI" in selected_execution else "Paper Trading"
+    st.selectbox("Execution Route:", ["Virtual Paper Trading (Active)"], disabled=True)
+    execution_type = "Paper Trading"
 
 with col_risk:
     risk_per_trade = st.number_input(
@@ -264,15 +194,14 @@ if risk_pct > 2.0:
 else:
     st.success(f"✅ **Safe Risk Discipline:** Position risk is **{risk_pct:.1f}%** (Within the safe 1-2% bracket).")
 
-if system_config.get("mode") != selected_mode or system_config.get("execution") != execution_type:
+if system_config.get("mode") != selected_mode:
     system_config["mode"] = selected_mode
-    system_config["execution"] = execution_type
     save_json(CONFIG_FILE, system_config)
 
 st.caption(f"Status: **{session_text}** | Live Feed: **{time_str}** | Profile: **{selected_mode}**")
 
 # -------------------------------------------------------------
-# 5. SMART AUTO-TIME-BASED MARKET UNIVERSE SELECTOR (IST ALIGNED)
+# 4. TIME-BASED MARKET UNIVERSE SELECTOR
 # -------------------------------------------------------------
 available_universes = list(MARKET_UNIVERSES.keys())
 
@@ -421,7 +350,7 @@ def get_live_price_for_asset(asset_name):
     return None
 
 # -------------------------------------------------------------
-# 6. AUTO SL, TP & 3:15 PM INTRADAY AUTO-SQUARE OFF ENGINE
+# 5. AUTO SL, TP & 3:15 PM SQUARE OFF ENGINE
 # -------------------------------------------------------------
 all_trades = paper_data.get("trades", [])
 needs_save = False
@@ -462,7 +391,7 @@ if needs_save:
     st.rerun()
 
 # -------------------------------------------------------------
-# 7. DAILY EOD REPORT GENERATOR & TELEGRAM DISPATCHER
+# 6. DAILY EOD REPORT & TELEGRAM DISPATCHER
 # -------------------------------------------------------------
 today_trades = [t for t in all_trades if str(t.get("date", "")).startswith(today_date_str)]
 today_closed = [t for t in today_trades if t.get("status") != "OPEN"]
@@ -487,15 +416,8 @@ def build_eod_message():
         f"💡 Discipline Verdict: {'Flawless Risk Management!' if sl_hits_today <= 1 else 'Review setups closely.'}"
     )
 
-if (ist_now.hour == 15 and ist_now.minute >= 35) or (ist_now.hour > 15):
-    if eod_tracker.get("last_sent_date") != today_date_str and tot_alerts_today > 0:
-        ok, _ = send_telegram_msg(build_eod_message())
-        if ok:
-            eod_tracker["last_sent_date"] = today_date_str
-            save_json(EOD_FLAG_FILE, eod_tracker)
-
 # -------------------------------------------------------------
-# 8. VIRTUAL PAPER TRADING PORTFOLIO & LIVE P&L ENGINE
+# 7. VIRTUAL PAPER TRADING PORTFOLIO & LIVE P&L
 # -------------------------------------------------------------
 st.markdown("### 💼 Virtual Paper Trading Portfolio (₹10,000 Capital Desk)")
 current_balance = paper_data.get("balance", 10000)
@@ -538,7 +460,7 @@ with st.expander("📊 Today's EOD Report & Telegram Dispatch", expanded=False):
             st.error(f"❌ Telegram Error: {res_txt}")
 
 # -------------------------------------------------------------
-# 8B. ACTIVE POSITIONS
+# 8. ACTIVE POSITIONS
 # -------------------------------------------------------------
 if open_trades:
     st.markdown("#### ⚡ Active Open Positions")
@@ -721,47 +643,25 @@ with sl_tp_col2:
     custom_tp = st.number_input("Target Price (TP ₹):", min_value=0.01, value=float(default_tp), step=0.05, format="%.2f")
 
 st.write("")
-if is_beginner or execution_type == "Paper Trading":
-    if st.button("📥 Record Virtual Paper Trade", use_container_width=True):
-        if selected_item:
-            new_trade = {
-                "date": ist_now.strftime("%Y-%m-%d %H:%M"),
-                "asset": chosen_asset,
-                "type": side,
-                "entry": custom_exec_price,
-                "sl": custom_sl,
-                "tp1": custom_tp,
-                "tp2": selected_item.get("Target 2 (1:2)", custom_tp),
-                "qty": qty_input,
-                "status": "OPEN"
-            }
-            paper_data["trades"].append(new_trade)
-            save_json(PAPER_TRADES_FILE, paper_data)
-            st.success(f"Virtual {side} Order Placed for {chosen_asset} at ₹{custom_exec_price} | SL: ₹{custom_sl} | TP: ₹{custom_tp}!")
-            st.rerun()
-        else:
-            st.warning("Pehle koi valid asset select karein.")
-else:
-    if st.button("🚀 Fire to Angel One (Real Fund)", use_container_width=True):
-        if selected_item:
-            raw_sym = selected_item["Ticker"]
-            exch = "NSE" if ".NS" in raw_sym or "^NSE" in raw_sym else "MCX"
-            clean_sym = raw_sym.replace(".NS", "").replace("^", "")
-            
-            ok, msg = place_order_smartapi(
-                symbol_token=clean_sym,
-                trading_symbol=clean_sym,
-                exchange=exch,
-                qty=qty_input,
-                transaction_type=side,
-                price=custom_exec_price
-            )
-            if ok:
-                st.success(msg)
-            else:
-                st.error(f"Execution failed: {msg}")
-        else:
-            st.warning("Asset select karein.")
+if st.button("📥 Record Virtual Paper Trade", use_container_width=True):
+    if selected_item:
+        new_trade = {
+            "date": ist_now.strftime("%Y-%m-%d %H:%M"),
+            "asset": chosen_asset,
+            "type": side,
+            "entry": custom_exec_price,
+            "sl": custom_sl,
+            "tp1": custom_tp,
+            "tp2": selected_item.get("Target 2 (1:2)", custom_tp),
+            "qty": qty_input,
+            "status": "OPEN"
+        }
+        paper_data["trades"].append(new_trade)
+        save_json(PAPER_TRADES_FILE, paper_data)
+        st.success(f"Virtual {side} Order Placed for {chosen_asset} at ₹{custom_exec_price} | SL: ₹{custom_sl} | TP: ₹{custom_tp}!")
+        st.rerun()
+    else:
+        st.warning("Pehle koi valid asset select karein.")
 
 # -------------------------------------------------------------
 # 13. COMPLETED PAPER TRADE HISTORY LEDGER
