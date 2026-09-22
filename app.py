@@ -11,7 +11,7 @@ import ta
 from datetime import datetime, timezone, timedelta
 
 # -------------------------------------------------------------
-# 1. PAGE SETUP
+# 1. PAGE SETUP & CONFIG
 # -------------------------------------------------------------
 st.set_page_config(
     page_title="Institutional Trading Terminal",
@@ -23,7 +23,6 @@ CONFIG_FILE = "system_mode.json"
 PAPER_TRADES_FILE = "paper_trades.json"
 EOD_FLAG_FILE = "eod_sent_flag.json"
 
-# Permanent Hardcoded Credentials (Zero Dependency on Secrets)
 TELEGRAM_BOT_TOKEN = "8732059380:AAGF7qoak6yPiI5ToYGPLSVQQM4GChhKriI"
 TELEGRAM_CHAT_ID = "1527960238"
 
@@ -43,7 +42,7 @@ def save_json(filepath, data):
     except Exception:
         pass
 
-system_config = load_json(CONFIG_FILE, {"mode": "Beginner (Safe)", "execution": "Paper Trading"})
+system_config = load_json(CONFIG_FILE, {"mode": "Pro Trader (Full)", "execution": "Virtual Paper Trading"})
 paper_data = load_json(PAPER_TRADES_FILE, {"balance": 10000, "trades": []})
 eod_tracker = load_json(EOD_FLAG_FILE, {"last_sent_date": ""})
 
@@ -68,7 +67,63 @@ def send_telegram_msg(msg_text):
         return False, f"Error: {str(e)}"
 
 # -------------------------------------------------------------
-# 2. WATCHLISTS & SECTOR INDICES (ALL 80 BLUECHIPS + INDICES)
+# 2. ANGEL ONE SMARTAPI SESSION ENGINE
+# -------------------------------------------------------------
+def get_secret(key_name):
+    try:
+        if hasattr(st, "secrets") and key_name in st.secrets:
+            return str(st.secrets[key_name])
+    except Exception:
+        pass
+    return os.environ.get(key_name, "")
+
+ANGEL_API_KEY = get_secret("ANGEL_API_KEY")
+ANGEL_CLIENT_ID = get_secret("ANGEL_CLIENT_ID")
+ANGEL_MPIN = get_secret("ANGEL_MPIN")
+ANGEL_TOTP_KEY = get_secret("ANGEL_TOTP_KEY")
+
+@st.cache_resource(ttl=3600)
+def get_smartapi_session():
+    if not (ANGEL_API_KEY and ANGEL_CLIENT_ID and ANGEL_MPIN and ANGEL_TOTP_KEY):
+        return None
+    try:
+        import pyotp
+        from SmartApi import SmartConnect
+        totp = pyotp.TOTP(ANGEL_TOTP_KEY).now()
+        smart_api = SmartConnect(api_key=ANGEL_API_KEY)
+        session_data = smart_api.generateSession(ANGEL_CLIENT_ID, ANGEL_MPIN, totp)
+        if session_data.get("status"):
+            return smart_api
+    except Exception:
+        pass
+    return None
+
+def place_order_smartapi(symbol_token, trading_symbol, exchange, qty, transaction_type, price=0):
+    api = get_smartapi_session()
+    if not api:
+        return False, "SmartAPI credentials missing! Use Paper Trading or add Angel One secrets."
+    try:
+        order_params = {
+            "variety": "NORMAL",
+            "tradingsymbol": trading_symbol,
+            "symboltoken": str(symbol_token),
+            "transactiontype": transaction_type,
+            "ordertype": "LIMIT" if price > 0 else "MARKET",
+            "price": str(price) if price > 0 else "0",
+            "producttype": "INTRADAY",
+            "duration": "DAY",
+            "quantity": str(qty),
+            "exchange": exchange
+        }
+        res = api.placeOrder(order_params)
+        if res.get("status"):
+            return True, f"Real Order Executed! Order ID: {res.get('data', {}).get('orderid')}"
+        return False, res.get("message", "Order rejected by broker.")
+    except Exception as e:
+        return False, str(e)
+
+# -------------------------------------------------------------
+# 3. WATCHLISTS & SECTOR INDICES (ALL 80 BLUECHIPS + INDICES)
 # -------------------------------------------------------------
 SECTOR_INDICES = {
     "NIFTY BANK": "^NSEBANK",
@@ -83,30 +138,21 @@ SECTOR_INDICES = {
 
 MARKET_UNIVERSES = {
     "Indian Equities & Indices (NSE)": [
-        # Indices
         "^NSEI", "^NSEBANK",
-        # Banking & Finance
         "HDFCBANK.NS", "ICICIBANK.NS", "SBIN.NS", "AXISBANK.NS", "KOTAKBANK.NS", 
         "INDUSINDBK.NS", "BAJFINANCE.NS", "BAJAJFINSV.NS", "SBILIFE.NS", "JIOFIN.NS", 
         "ANGELONE.NS", "BSE.NS", "CDSL.NS", "MCX.NS",
-        # IT
         "TCS.NS", "INFY.NS", "HCLTECH.NS", "WIPRO.NS", "LTIM.NS", 
         "PERSISTENT.NS", "COFORGE.NS", "TATATECH.NS",
-        # Auto
         "TATAMOTORS.NS", "MARUTI.NS", "M&M.NS", "EICHERMOT.NS", "ASHOKLEY.NS", "EXIDEIND.NS",
-        # Energy & Power
         "RELIANCE.NS", "ONGC.NS", "COALINDIA.NS", "NTPC.NS", "POWERGRID.NS", 
         "TATAPOWER.NS", "ADANIGREEN.NS", "SUZLON.NS", "IREDA.NS",
-        # Defense & Rail
         "HAL.NS", "BEL.NS", "BDL.NS", "BHEL.NS", "MAZDOCK.NS", "COCHINSHIP.NS",
         "RVNL.NS", "IRFC.NS", "IRCON.NS", "RAILTEL.NS", "HUDCO.NS", "NBCC.NS",
-        # Metals & Infra
         "TATASTEEL.NS", "JSWSTEEL.NS", "HINDALCO.NS", "SAIL.NS", "NMDC.NS", "NATIONALUM.NS",
         "LT.NS", "ULTRACEMCO.NS", "GRASIM.NS", "DLF.NS", "LODHA.NS",
-        # FMCG & Retail
         "ITC.NS", "HINDUNILVR.NS", "ASIANPAINT.NS", "TATACONSUM.NS", "TITAN.NS", 
         "TRENT.NS", "ZOMATO.NS", "KALYANKJIL.NS", "DIXON.NS", "POLYCAB.NS", "KEI.NS",
-        # Pharma & Conglomerates
         "SUNPHARMA.NS", "CIPLA.NS", "DRREDDY.NS", "DIVISLAB.NS", "AUROPHARMA.NS", "LUPIN.NS",
         "BHARTIARTL.NS", "ADANIENT.NS", "ADANIPORTS.NS"
     ],
@@ -150,7 +196,7 @@ def calculate_vwap(df):
     return (typical_price * vol).cumsum() / vol.cumsum()
 
 # -------------------------------------------------------------
-# 3. TOP HEADER & PROFILE SWITCHER
+# 4. TOP HEADER & PROFILE SWITCHER
 # -------------------------------------------------------------
 st.title("⚡ Institutional Grade Trading Terminal")
 
@@ -168,14 +214,22 @@ with col_mode:
     selected_mode = st.selectbox(
         "👤 Select Profile Mode:",
         ["Beginner (Safe)", "Pro Trader (Full)"],
-        index=0 if system_config.get("mode") == "Beginner (Safe)" else 1
+        index=1 if system_config.get("mode") == "Pro Trader (Full)" else 0
     )
 
 is_beginner = (selected_mode == "Beginner (Safe)")
 
 with col_exec:
-    st.selectbox("Execution Route:", ["Virtual Paper Trading (Active)"], disabled=True)
-    execution_type = "Paper Trading"
+    if is_beginner:
+        st.selectbox("Execution Route:", ["Virtual Paper Trading (Locked)"], disabled=True)
+        execution_type = "Paper Trading"
+    else:
+        selected_execution = st.selectbox(
+            "Execution Route:",
+            ["Dual Engine (Paper + SmartAPI)", "Virtual Paper Trading", "Real Fund (SmartAPI)"],
+            index=0
+        )
+        execution_type = "Dual" if "Dual" in selected_execution else ("SmartAPI" if "SmartAPI" in selected_execution else "Paper Trading")
 
 with col_risk:
     risk_per_trade = st.number_input(
@@ -194,21 +248,18 @@ if risk_pct > 2.0:
 else:
     st.success(f"✅ **Safe Risk Discipline:** Position risk is **{risk_pct:.1f}%** (Within the safe 1-2% bracket).")
 
-if system_config.get("mode") != selected_mode:
+if system_config.get("mode") != selected_mode or system_config.get("execution") != execution_type:
     system_config["mode"] = selected_mode
+    system_config["execution"] = execution_type
     save_json(CONFIG_FILE, system_config)
 
 st.caption(f"Status: **{session_text}** | Live Feed: **{time_str}** | Profile: **{selected_mode}**")
 
 # -------------------------------------------------------------
-# 4. TIME-BASED MARKET UNIVERSE SELECTOR
+# 5. MARKET UNIVERSE SELECTOR (TIME-ALIGNED)
 # -------------------------------------------------------------
 available_universes = list(MARKET_UNIVERSES.keys())
 
-# IST Windows:
-# 09:15 AM to 03:30 PM (555 to 930 mins) -> Indian Equities
-# 03:30 PM to 09:30 PM (931 to 1290 mins) -> Forex & Commodities
-# 09:30 PM to 12:00 AM (1291 to 1440 mins) -> US Equities
 if 555 <= cur_mins <= 930:
     default_univ_index = available_universes.index("Indian Equities & Indices (NSE)")
 elif 930 < cur_mins <= 1290:
@@ -271,7 +322,7 @@ if raw_data is not None:
             if is_breakout:
                 signal = "🟢 BUY BREAKOUT"
                 active_breakouts += 1
-                trade_logic = f"Closed above resistance ({res_level:.2f}) with VWAP support."
+                trade_logic = f"Closed above resistance ({res_level:.4f if is_special else res_level:.2f}) with VWAP support."
                 if (rvol >= 2.0 or is_special) and (c_close > ema50) and (rsi >= 58):
                     grade = "Grade A+ (Sniper)"
                 elif (rvol >= 1.3 or is_special) and (rsi >= 52):
@@ -281,7 +332,7 @@ if raw_data is not None:
             elif is_breakdown:
                 signal = "🔴 SELL BREAKDOWN"
                 active_breakouts += 1
-                trade_logic = f"Closed below support ({sup_level:.2f}) with bearish pressure."
+                trade_logic = f"Closed below support ({sup_level:.4f if is_special else sup_level:.2f}) with bearish pressure."
                 if (rvol >= 2.0 or is_special) and (c_close < ema50) and (rsi <= 42):
                     grade = "Grade A+ (Sniper)"
                 elif (rvol >= 1.3 or is_special) and (rsi <= 48):
@@ -307,7 +358,7 @@ if raw_data is not None:
             rec_size = max(1, int(risk_per_trade / risk_per_unit))
 
             display_name = NAME_MAP.get(ticker, ticker.replace(".NS", "").replace("^", "").replace("-USD", ""))
-            decimals = 4 if is_special and ("USD" in ticker or "=X" in ticker) else 2
+            decimals = 4 if (is_special and ("=" in ticker or "USD" in ticker)) else 2
 
             records.append({
                 "Ticker": ticker,
@@ -324,7 +375,8 @@ if raw_data is not None:
                 "RSI": round(rsi, 1),
                 "Recommended Size": f"{rec_size} Units",
                 "Why This Trade": trade_logic,
-                "Size": rec_size
+                "Size": rec_size,
+                "Decimals": decimals
             })
         except Exception:
             continue
@@ -350,10 +402,12 @@ def get_live_price_for_asset(asset_name):
     return None
 
 # -------------------------------------------------------------
-# 5. AUTO SL, TP & 3:15 PM SQUARE OFF ENGINE
+# 6. AUTO SL, TP & 3:15 PM INDIAN MARKET SQUARE OFF ENGINE
 # -------------------------------------------------------------
 all_trades = paper_data.get("trades", [])
 needs_save = False
+
+# Indian market squareoff time check (past 3:15 PM IST or before 9:00 AM IST)
 is_past_315 = (ist_now.hour > 15) or (ist_now.hour == 15 and ist_now.minute >= 15) or (ist_now.hour < 9)
 
 for trade in all_trades:
@@ -369,7 +423,19 @@ for trade in all_trades:
 
         sl_hit = (side_type == "BUY" and c_ltp <= s_price) or (side_type == "SELL" and c_ltp >= s_price)
         tp_hit = (side_type == "BUY" and c_ltp >= t_price) or (side_type == "SELL" and c_ltp <= t_price)
-        intraday_expired = (trade_date != today_date_str) or is_past_315
+        
+        # Check if asset belongs to Forex, Commodities, Crypto or US Equities
+        is_global_asset = any(fx in str(a_name).upper() for fx in [
+            "USD", "EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "NZD", 
+            "BTC", "ETH", "SOL", "XAU", "XAG", "CRUDE", "COPPER", 
+            "NVDA", "TSLA", "AAPL", "MSFT", "AMZN", "META", "GOOGL", "AMD", "NFLX", "PLTR"
+        ])
+
+        # 3:15 PM Square off ONLY applies to Indian Equities
+        if is_global_asset:
+            intraday_expired = False
+        else:
+            intraday_expired = (trade_date != today_date_str) or is_past_315
 
         if sl_hit or tp_hit or intraday_expired:
             if sl_hit:
@@ -377,7 +443,7 @@ for trade in all_trades:
             elif tp_hit:
                 trade["status"] = "TARGET_HIT"
             else:
-                trade["status"] = "INTRADAY_AUTO_SQUAREOFF"
+                trade["status"] = "INTRADAY_AUTO_SQUAREOFF (3:15 PM)"
 
             trade["exit_price"] = c_ltp
             trade["exit_time"] = ist_now.strftime("%Y-%m-%d %H:%M")
@@ -391,7 +457,7 @@ if needs_save:
     st.rerun()
 
 # -------------------------------------------------------------
-# 6. DAILY EOD REPORT & TELEGRAM DISPATCHER
+# 7. DAILY EOD REPORT ENGINE
 # -------------------------------------------------------------
 today_trades = [t for t in all_trades if str(t.get("date", "")).startswith(today_date_str)]
 today_closed = [t for t in today_trades if t.get("status") != "OPEN"]
@@ -417,7 +483,7 @@ def build_eod_message():
     )
 
 # -------------------------------------------------------------
-# 7. VIRTUAL PAPER TRADING PORTFOLIO & LIVE P&L
+# 8. VIRTUAL PORTFOLIO & ACTIVE POSITIONS
 # -------------------------------------------------------------
 st.markdown("### 💼 Virtual Paper Trading Portfolio (₹10,000 Capital Desk)")
 current_balance = paper_data.get("balance", 10000)
@@ -459,11 +525,9 @@ with st.expander("📊 Today's EOD Report & Telegram Dispatch", expanded=False):
         else:
             st.error(f"❌ Telegram Error: {res_txt}")
 
-# -------------------------------------------------------------
-# 8. ACTIVE POSITIONS
-# -------------------------------------------------------------
+# Active Positions Display
 if open_trades:
-    st.markdown("#### ⚡ Active Open Positions")
+    st.markdown("#### ⚡ Active Open Positions (Running Trades)")
     for idx, trade in enumerate(open_trades):
         asset_name = trade.get('asset')
         current_ltp = get_live_price_for_asset(asset_name) or trade.get('entry')
@@ -474,11 +538,11 @@ if open_trades:
         sl_price = trade.get('sl')
         tp1_price = trade.get('tp1')
         
-        if t_type == "BUY":
-            live_pnl = (current_ltp - entry_price) * qty
-        else:
-            live_pnl = (entry_price - current_ltp) * qty
-            
+        is_fx = any(fx in str(asset_name).upper() for fx in ["USD", "EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "NZD", "BTC", "ETH", "SOL", "XAU", "XAG"])
+        fmt = "{:+,.4f}" if is_fx else "{:+,.2f}"
+        disp_fmt = "{:.4f}" if is_fx else "{:.2f}"
+
+        live_pnl = (current_ltp - entry_price) * qty if t_type == "BUY" else (entry_price - current_ltp) * qty
         pnl_color = "#2e7d32" if live_pnl >= 0 else "#c62828"
         pnl_bg = "#e8f5e9" if live_pnl >= 0 else "#ffebee"
 
@@ -490,15 +554,15 @@ if open_trades:
                         <span style="background: {'#1b5e20' if t_type=='BUY' else '#b71c1c'}; color: white; padding: 2px 6px; border-radius: 4px; font-size: 11px; margin-left: 6px;">{t_type}</span>
                     </div>
                     <div style="font-size: 15px; font-weight: bold; color: {pnl_color}; background: {pnl_bg}; padding: 2px 8px; border-radius: 4px;">
-                        P&L: ₹{live_pnl:+,.2f}
+                        P&L: {fmt.format(live_pnl)}
                     </div>
                 </div>
                 <div style="display: flex; justify-content: space-between; margin-top: 8px; font-size: 12px; color: #b0bec5;">
                     <span>Qty: <b>{qty}</b></span>
-                    <span>Entry: <b>₹{entry_price}</b></span>
-                    <span>LTP: <b style="color: #fff;">₹{current_ltp}</b></span>
-                    <span>SL: <b style="color: #ef5350;">₹{sl_price}</b></span>
-                    <span>Target 1: <b style="color: #66bb6a;">₹{tp1_price}</b></span>
+                    <span>Entry: <b>{disp_fmt.format(entry_price)}</b></span>
+                    <span>LTP: <b style="color: #fff;">{disp_fmt.format(current_ltp)}</b></span>
+                    <span>SL: <b style="color: #ef5350;">{disp_fmt.format(sl_price)}</b></span>
+                    <span>Target 1: <b style="color: #66bb6a;">{disp_fmt.format(tp1_price)}</b></span>
                 </div>
             </div>
         """, unsafe_allow_html=True)
@@ -513,7 +577,7 @@ if open_trades:
                 trade["pnl"] = pnl_realized
                 paper_data["balance"] += pnl_realized
                 save_json(PAPER_TRADES_FILE, paper_data)
-                st.success(f"Closed {asset_name} position at ₹{current_ltp}!")
+                st.success(f"Closed {asset_name} position!")
                 st.rerun()
 
 # -------------------------------------------------------------
@@ -576,7 +640,7 @@ with m2:
 with m3:
     st.metric("Risk Budget", f"₹{risk_per_trade}")
 with m4:
-    st.metric("Execution Mode", execution_type)
+    st.metric("Active Route", selected_mode)
 
 st.markdown("---")
 
@@ -584,15 +648,15 @@ st.markdown("---")
 # 11. MONITORING DATA TABLE
 # -------------------------------------------------------------
 if records:
-    df_display = pd.DataFrame(records).drop(columns=["Ticker", "Size", "VWAP", "Breakout_Level"])
+    df_display = pd.DataFrame(records).drop(columns=["Ticker", "Size", "VWAP", "Breakout_Level", "Decimals"])
     st.dataframe(df_display, use_container_width=True, hide_index=True)
 else:
     st.info("No active breakout setups currently found in this asset pool.")
 
 # -------------------------------------------------------------
-# 12. DUAL EXECUTION DESK WITH LIVE ENTRY VALIDATION
+# 12. DUAL ORDER EXECUTION DESK (PAPER & REAL FUND)
 # -------------------------------------------------------------
-st.markdown("### ⚡ Order Execution Desk")
+st.markdown("### ⚡ Order Execution Desk (Dual Engine: Paper + Real Broker)")
 ord_col1, ord_col2, ord_col3, ord_col4 = st.columns([1.8, 1.2, 1.2, 1.8])
 asset_names = [r["Asset"] for r in records] if records else []
 
@@ -603,6 +667,14 @@ selected_item = next((r for r in records if r["Asset"] == chosen_asset), None)
 default_ltp = selected_item["LTP"] if selected_item else 100.0
 default_sl = selected_item["Stop Loss"] if selected_item else round(default_ltp * 0.99, 2)
 default_tp = selected_item["Target 1 (1:1)"] if selected_item else round(default_ltp * 1.01, 2)
+
+# Dynamic 4-digit / 2-digit decimals calculation
+is_forex_asset = any(fx in str(chosen_asset).upper() for fx in [
+    "USD", "EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "NZD", "INR", "XAU", "XAG"
+])
+dec_format = "%.4f" if is_forex_asset else "%.2f"
+dec_step = 0.0001 if is_forex_asset else 0.05
+min_val = 0.0001 if is_forex_asset else 0.01
 
 if selected_item:
     vwap_val = selected_item.get("VWAP", default_ltp)
@@ -632,40 +704,66 @@ with ord_col2:
 with ord_col3:
     suggested_qty = selected_item["Size"] if selected_item else 1
     qty_input = st.number_input("Qty / Lots:", min_value=1, value=max(1, suggested_qty), step=1)
-is_forex_asset = any(fx in str(chosen_asset) for fx in ["USD", "EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "NZD", "INR"])
-dec_format = "%.4f" if is_forex_asset else "%.2f"
-dec_step = 0.0001 if is_forex_asset else 0.05
+
 with ord_col4:
-  custom_exec_price = st.number_input("Execution Price:", min_value=0.0001, value=float(default_ltp), step=dec_step, format=dec_format)
+    custom_exec_price = st.number_input("Execution Price:", min_value=min_val, value=float(default_ltp), step=dec_step, format=dec_format)
 
 sl_tp_col1, sl_tp_col2 = st.columns(2)
 with sl_tp_col1:
-    custom_sl = st.number_input("Stop Loss (SL):", min_value=0.0001, value=float(default_sl), step=dec_step, format=dec_format)
+    custom_sl = st.number_input("Stop Loss (SL):", min_value=min_val, value=float(default_sl), step=dec_step, format=dec_format)
 with sl_tp_col2:
-    custom_tp = st.number_input("Target Price (TP):", min_value=0.0001, value=float(default_tp), step=dec_step, format=dec_format)
+    custom_tp = st.number_input("Target Price (TP):", min_value=min_val, value=float(default_tp), step=dec_step, format=dec_format)
+
 st.write("")
-if st.button("📥 Record Virtual Paper Trade", use_container_width=True):
-    if selected_item:
-        new_trade = {
-            "date": ist_now.strftime("%Y-%m-%d %H:%M"),
-            "asset": chosen_asset,
-            "type": side,
-            "entry": custom_exec_price,
-            "sl": custom_sl,
-            "tp1": custom_tp,
-            "tp2": selected_item.get("Target 2 (1:2)", custom_tp),
-            "qty": qty_input,
-            "status": "OPEN"
-        }
-        paper_data["trades"].append(new_trade)
-        save_json(PAPER_TRADES_FILE, paper_data)
-        st.success(f"Virtual {side} Order Placed for {chosen_asset} at ₹{custom_exec_price} | SL: ₹{custom_sl} | TP: ₹{custom_tp}!")
-        st.rerun()
-    else:
-        st.warning("Pehle koi valid asset select karein.")
+btn_col1, btn_col2 = st.columns(2)
+
+with btn_col1:
+    if st.button("📥 Record Virtual Paper Trade", use_container_width=True):
+        if selected_item:
+            new_trade = {
+                "date": ist_now.strftime("%Y-%m-%d %H:%M"),
+                "asset": chosen_asset,
+                "type": side,
+                "entry": custom_exec_price,
+                "sl": custom_sl,
+                "tp1": custom_tp,
+                "tp2": selected_item.get("Target 2 (1:2)", custom_tp),
+                "qty": qty_input,
+                "status": "OPEN"
+            }
+            paper_data["trades"].append(new_trade)
+            save_json(PAPER_TRADES_FILE, paper_data)
+            st.success(f"✅ Virtual {side} Recorded for {chosen_asset} at {custom_exec_price} | SL: {custom_sl} | TP: {custom_tp}!")
+            st.rerun()
+        else:
+            st.warning("Pehle koi valid asset select karein.")
+
+with btn_col2:
+    if st.button("🚀 Fire Real Order (Angel One)", use_container_width=True):
+        if is_beginner:
+            st.error("Beginner mode me Real Trading locked hai. Top profile se 'Pro Trader (Full)' select karein.")
+        elif selected_item:
+            raw_sym = selected_item["Ticker"]
+            exch = "NSE" if ".NS" in raw_sym or "^NSE" in raw_sym else "MCX"
+            clean_sym = raw_sym.replace(".NS", "").replace("^", "")
+            
+            ok, msg = place_order_smartapi(
+                symbol_token=clean_sym,
+                trading_symbol=clean_sym,
+                exchange=exch,
+                qty=qty_input,
+                transaction_type=side,
+                price=custom_exec_price
+            )
+            if ok:
+                st.success(f"🟢 REAL BROKER ORDER: {msg}")
+            else:
+                st.error(f"🔴 REAL BROKER ORDER FAILED: {msg}")
+        else:
+            st.warning("Pehle koi valid asset select karein.")
 
 # -------------------------------------------------------------
-# 13. COMPLETED PAPER TRADE HISTORY LEDGER
+# 13. COMPLETED TRADE HISTORY LEDGER
 # -------------------------------------------------------------
 if closed_trades:
     with st.expander("📜 Completed Paper Trades Ledger", expanded=False):
@@ -673,7 +771,7 @@ if closed_trades:
         st.dataframe(history_df, use_container_width=True, hide_index=True)
 
 # -------------------------------------------------------------
-# 14. SMART TRADINGVIEW CHART
+# 14. TRADINGVIEW LIVE CHART
 # -------------------------------------------------------------
 st.markdown("### 📈 Interactive TradingView Live Chart")
 
