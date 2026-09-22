@@ -137,44 +137,29 @@ SECTOR_INDICES = {
 }
 
 NSE_EQUITIES = [
-    # Benchmark Indices
     "^NSEI", "^NSEBANK",
-    # Banking & Financials
     "HDFCBANK.NS", "ICICIBANK.NS", "SBIN.NS", "AXISBANK.NS", "KOTAKBANK.NS", 
     "INDUSINDBK.NS", "BAJFINANCE.NS", "BAJAJFINSV.NS", "SBILIFE.NS", "JIOFIN.NS", 
     "ANGELONE.NS", "BSE.NS", "CDSL.NS", "MCX.NS",
-    # IT & Tech
     "TCS.NS", "INFY.NS", "HCLTECH.NS", "WIPRO.NS", "LTIM.NS", 
     "PERSISTENT.NS", "COFORGE.NS", "TATATECH.NS",
-    # Auto & EV
     "TATAMOTORS.NS", "MARUTI.NS", "M&M.NS", "EICHERMOT.NS", "ASHOKLEY.NS", "EXIDEIND.NS",
-    # Energy & Green Infra
     "RELIANCE.NS", "ONGC.NS", "COALINDIA.NS", "NTPC.NS", "POWERGRID.NS", 
     "TATAPOWER.NS", "ADANIGREEN.NS", "SUZLON.NS", "IREDA.NS",
-    # Defence & PSU Engineering
     "HAL.NS", "BEL.NS", "BDL.NS", "BHEL.NS", "MAZDOCK.NS", "COCHINSHIP.NS",
-    # Railways & PSU Infrastructure
     "RVNL.NS", "IRFC.NS", "IRCON.NS", "RAILTEL.NS", "HUDCO.NS", "NBCC.NS",
-    # Metals & Mining
     "TATASTEEL.NS", "JSWSTEEL.NS", "HINDALCO.NS", "SAIL.NS", "NMDC.NS", "NATIONALUM.NS",
-    # Infrastructure, Capital Goods & Real Estate
     "LT.NS", "ULTRACEMCO.NS", "GRASIM.NS", "DLF.NS", "LODHA.NS",
-    # FMCG, Consumption & Retail
     "ITC.NS", "HINDUNILVR.NS", "ASIANPAINT.NS", "TATACONSUM.NS", "TITAN.NS", 
     "TRENT.NS", "ZOMATO.NS", "KALYANKJIL.NS", "DIXON.NS", "POLYCAB.NS", "KEI.NS",
-    # Pharma & Healthcare
     "SUNPHARMA.NS", "CIPLA.NS", "DRREDDY.NS", "DIVISLAB.NS", "AUROPHARMA.NS", "LUPIN.NS",
-    # Conglomerates & Ports
     "BHARTIARTL.NS", "ADANIENT.NS", "ADANIPORTS.NS"
 ]
 
 COMMODITIES_AND_FOREX = [
-    # Commodities
     "GC=F", "SI=F", "CL=F", "HG=F", "NG=F",
-    # Major Currencies
     "INR=X", "EURUSD=X", "GBPUSD=X", "USDJPY=X", 
     "AUDUSD=X", "USDCAD=X", "USDCHF=X", "NZDUSD=X",
-    # Cross Currency Pairs
     "EURGBP=X", "EURJPY=X", "GBPJPY=X"
 ]
 
@@ -191,9 +176,9 @@ CRYPTO_ASSETS = [
 ALL_SYSTEM_ASSETS = NSE_EQUITIES + COMMODITIES_AND_FOREX + US_EQUITIES + CRYPTO_ASSETS
 
 MARKET_UNIVERSES = {
-    "US Equities (NASDAQ/NYSE)": US_EQUITIES,
-    "Forex & Commodities": COMMODITIES_AND_FOREX,
     "Indian Equities & Indices (NSE)": NSE_EQUITIES,
+    "Forex & Commodities": COMMODITIES_AND_FOREX,
+    "US Equities (NASDAQ/NYSE)": US_EQUITIES,
     "Crypto (24x7)": CRYPTO_ASSETS
 }
 
@@ -219,9 +204,6 @@ NAME_MAP = {
     "BTC-USD": "BITCOIN",
     "ETH-USD": "ETHEREUM",
     "SOL-USD": "SOLANA",
-    "XRP-USD": "RIPPLE",
-    "BNB-USD": "BINANCE COIN",
-    "DOGE-USD": "DOGECOIN",
     "GOOGL": "ALPHABET (GOOGLE)",
     "NVDA": "NVIDIA",
     "TSLA": "TESLA",
@@ -249,7 +231,7 @@ cur_mins = ist_now.hour * 60 + ist_now.minute
 is_nse_open = (ist_now.weekday() < 5) and (555 <= cur_mins <= 930)
 session_text = "🟢 NSE SESSION OPEN" if is_nse_open else "🔴 NSE SESSION CLOSED"
 
-col_mode, col_exec, col_risk = st.columns([1.5, 1.5, 1.2])
+col_mode, col_exec = st.columns([2, 2])
 
 with col_mode:
     selected_mode = st.selectbox(
@@ -272,23 +254,6 @@ with col_exec:
         )
         execution_type = "Dual" if "Dual" in selected_execution else ("SmartAPI" if "SmartAPI" in selected_execution else "Paper Trading")
 
-with col_risk:
-    risk_per_trade = st.number_input(
-        "Risk Per Position (₹ / $):",
-        min_value=50,
-        max_value=50000,
-        value=100,
-        step=50
-    )
-
-current_balance = paper_data.get("balance", 10000)
-risk_pct = (risk_per_trade / current_balance) * 100 if current_balance > 0 else 0
-
-if risk_pct > 2.0:
-    st.warning(f"⚠️ **High Risk Alert:** Selected risk is **{risk_pct:.1f}%** of your capital! Keep risk at **1% - 2% (₹100 - ₹200)**.")
-else:
-    st.success(f"✅ **Safe Risk Discipline:** Position risk is **{risk_pct:.1f}%** (Within the safe 1-2% bracket).")
-
 if system_config.get("mode") != selected_mode or system_config.get("execution") != execution_type:
     system_config["mode"] = selected_mode
     system_config["execution"] = execution_type
@@ -297,7 +262,38 @@ if system_config.get("mode") != selected_mode or system_config.get("execution") 
 st.caption(f"Status: **{session_text}** | Live Feed: **{time_str}** | Profile: **{selected_mode}**")
 
 # -------------------------------------------------------------
-# 5. MARKET UNIVERSE SELECTOR (TIME-ALIGNED ROUTING)
+# 5. RISK MANAGEMENT & DISCIPLINE ALLOCATION DESK
+# -------------------------------------------------------------
+st.markdown("### 🛡️ Risk Management & Capital Allocation Desk")
+r_col1, r_col2, r_col3, r_col4 = st.columns(4)
+
+current_balance = paper_data.get("balance", 10000)
+
+with r_col1:
+    account_capital = st.number_input("Account Capital (₹):", min_value=1000, value=int(current_balance), step=1000)
+
+with r_col2:
+    risk_pct_choice = st.selectbox("Max Risk Per Trade (%):", [1.0, 1.5, 2.0, 3.0], index=0)
+
+safe_budget = (account_capital * risk_pct_choice) / 100.0
+
+with r_col3:
+    risk_per_trade = st.number_input("Risk Per Position (₹):", min_value=50.0, value=float(safe_budget), step=25.0)
+
+with r_col4:
+    max_daily_loss = st.number_input("Max Daily Loss Cap (₹):", min_value=100.0, value=float(safe_budget * 3), step=50.0)
+
+actual_risk_pct = (risk_per_trade / account_capital) * 100 if account_capital > 0 else 0
+
+if actual_risk_pct > 2.0:
+    st.error(f"🚨 **High Risk Alert:** Selected risk is **{actual_risk_pct:.1f}%** of capital! Strictly recommend keeping risk under 2% (₹{safe_budget:.0f}).")
+else:
+    st.success(f"✅ **Disciplined Risk:** Risk per trade is **{actual_risk_pct:.1f}%** (₹{risk_per_trade:.0f} per trade | Max Daily Loss: ₹{max_daily_loss:.0f}).")
+
+st.markdown("---")
+
+# -------------------------------------------------------------
+# 6. MARKET UNIVERSE SELECTOR (TIME-ALIGNED ROUTING)
 # -------------------------------------------------------------
 available_universes = list(MARKET_UNIVERSES.keys())
 
@@ -448,12 +444,12 @@ def get_live_price_for_asset(asset_name):
     return None
 
 # -------------------------------------------------------------
-# 6. AUTO SL, TP & 3:15 PM INDIAN MARKET SQUARE OFF ENGINE
+# 7. AUTO SL, TP & 3:15 PM INDIAN MARKET SQUARE OFF ENGINE
 # -------------------------------------------------------------
 all_trades = paper_data.get("trades", [])
 needs_save = False
 
-# 3:15 PM square off check
+# 3:15 PM square off strictly for Indian Equities
 is_past_315 = (ist_now.hour > 15) or (ist_now.hour == 15 and ist_now.minute >= 15) or (ist_now.hour < 9)
 
 for trade in all_trades:
@@ -470,7 +466,7 @@ for trade in all_trades:
         sl_hit = (side_type == "BUY" and c_ltp <= s_price) or (side_type == "SELL" and c_ltp >= s_price)
         tp_hit = (side_type == "BUY" and c_ltp >= t_price) or (side_type == "SELL" and c_ltp <= t_price)
         
-        # Check whether the asset belongs to Forex, Commodities, Crypto or US Equities
+        # Check global asset status
         is_global_asset = any(fx in str(a_name).upper() for fx in [
             "USD", "EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "NZD", 
             "BTC", "ETH", "SOL", "XAU", "XAG", "CRUDE", "COPPER", "GOLD", "SILVER", "GAS",
@@ -478,7 +474,7 @@ for trade in all_trades:
             "AVGO", "SMCI", "ARM", "QCOM", "INTC", "MU", "PANW", "CRWD", "COIN", "MSTR"
         ])
 
-        # 3:15 PM Square off ONLY applies to Indian Equities (NSE)
+        # 3:15 PM Square off ONLY applies to Indian Equities
         if is_global_asset:
             intraday_expired = False
         else:
@@ -504,32 +500,6 @@ if needs_save:
     st.rerun()
 
 # -------------------------------------------------------------
-# 7. DAILY EOD REPORT ENGINE
-# -------------------------------------------------------------
-today_trades = [t for t in all_trades if str(t.get("date", "")).startswith(today_date_str)]
-today_closed = [t for t in today_trades if t.get("status") != "OPEN"]
-
-tot_alerts_today = len(today_trades)
-tp_hits_today = len([t for t in today_closed if t.get("status") == "TARGET_HIT"])
-sl_hits_today = len([t for t in today_closed if t.get("status") == "SL_HIT"])
-today_pnl = sum([float(t.get("pnl", 0.0)) for t in today_closed])
-win_rate = (tp_hits_today / len(today_closed) * 100) if today_closed else 0.0
-
-def build_eod_message():
-    sign = "+" if today_pnl >= 0 else ""
-    return (
-        f"📊 <b>DAILY EOD TRADING PERFORMANCE REPORT</b>\n"
-        f"📅 Date: {today_date_str} | 🕒 Time: {ist_now.strftime('%I:%M %p IST')}\n\n"
-        f"🔢 Total Alerts Triggered: {tot_alerts_today}\n"
-        f"🎯 Target Hits (1:1 / 1:2): {tp_hits_today} ✅\n"
-        f"🛑 Stop-Loss Hits: {sl_hits_today} ❌\n"
-        f"📈 Daily Win-Rate: {win_rate:.1f}%\n\n"
-        f"💵 Today's Paper P&L: <b>₹{sign}{today_pnl:,.2f}</b>\n"
-        f"💼 Current Portfolio Fund: <b>₹{current_balance:,.2f}</b>\n\n"
-        f"💡 Discipline Verdict: {'Flawless Risk Management!' if sl_hits_today <= 1 else 'Review setups closely.'}"
-    )
-
-# -------------------------------------------------------------
 # 8. VIRTUAL PORTFOLIO & ACTIVE POSITIONS
 # -------------------------------------------------------------
 st.markdown("### 💼 Virtual Paper Trading Portfolio (₹10,000 Capital Desk)")
@@ -548,29 +518,11 @@ with p3:
     st.metric("Open / Closed Trades", f"{len(open_trades)} Open | {len(closed_trades)} Closed")
 with p4:
     st.write("")
-    if st.button("🔄 Reset to ₹10k", help="Reset balance to ₹10,000"):
+    if st.button("🔄 Reset to ₹10k"):
         paper_data = {"balance": 10000, "trades": []}
         save_json(PAPER_TRADES_FILE, paper_data)
         st.success("Balance reset to ₹10,000!")
         st.rerun()
-
-with st.expander("📊 Today's EOD Report & Telegram Dispatch", expanded=False):
-    e1, e2, e3, e4 = st.columns(4)
-    with e1:
-        st.metric("Today's Trades", tot_alerts_today)
-    with e2:
-        st.metric("Targets Hit", f"{tp_hits_today} ✅")
-    with e3:
-        st.metric("SL Hit", f"{sl_hits_today} ❌")
-    with e4:
-        st.metric("Today P&L", f"₹{today_pnl:+,.2f}")
-    
-    if st.button("📤 Send Accurate EOD Report to Telegram Now"):
-        ok, res_txt = send_telegram_msg(build_eod_message())
-        if ok:
-            st.success("✅ EOD Report Telegram par successfully deliver ho gayi hai!")
-        else:
-            st.error(f"❌ Telegram Error: {res_txt}")
 
 # Active Positions Display
 if open_trades:
@@ -628,56 +580,7 @@ if open_trades:
                 st.rerun()
 
 # -------------------------------------------------------------
-# 9. SECTOR MOMENTUM HEATMAP
-# -------------------------------------------------------------
-with st.expander("📊 Live Sectoral Momentum Heatmap (NSE)", expanded=True):
-    try:
-        sector_tickers = list(SECTOR_INDICES.values())
-        sec_data = yf.download(sector_tickers, period="2d", interval="15m", group_by='ticker', progress=False)
-        sec_cols = st.columns(len(SECTOR_INDICES))
-        
-        for idx, (sec_name, sec_sym) in enumerate(SECTOR_INDICES.items()):
-            try:
-                s_df = sec_data[sec_sym].dropna()
-                curr = float(s_df['Close'].iloc[-1])
-                prev = float(s_df['Close'].iloc[0])
-                pct = ((curr - prev) / prev) * 100
-
-                if pct >= 0:
-                    bg_color, border_color, text_color, icon = "#e8f5e9", "#2e7d32", "#1b5e20", "▲"
-                else:
-                    bg_color, border_color, text_color, icon = "#ffebee", "#c62828", "#b71c1c", "▼"
-
-                clean_name = sec_name.replace("NIFTY ", "")
-
-                with sec_cols[idx]:
-                    st.markdown(f"""
-                        <div style="
-                            background-color: {bg_color}; 
-                            border: 1px solid {border_color}; 
-                            border-radius: 8px; 
-                            padding: 8px 4px; 
-                            text-align: center;
-                            box-shadow: 0 1px 3px rgba(0,0,0,0.08);
-                        ">
-                            <div style="font-size: 11px; font-weight: 700; color: #555555; text-transform: uppercase;">
-                                {clean_name}
-                            </div>
-                            <div style="font-size: 14px; font-weight: 800; color: #111111; margin: 2px 0;">
-                                {curr:.1f}
-                            </div>
-                            <div style="font-size: 12px; font-weight: 700; color: {text_color};">
-                                {icon} {pct:+.2f}%
-                            </div>
-                        </div>
-                    """, unsafe_allow_html=True)
-            except Exception:
-                pass
-    except Exception:
-        st.caption("Sector radar loading...")
-
-# -------------------------------------------------------------
-# 10. METRIC CARDS ROW
+# 9. METRICS & MONITORING TABLE
 # -------------------------------------------------------------
 m1, m2, m3, m4 = st.columns(4)
 with m1:
@@ -685,15 +588,10 @@ with m1:
 with m2:
     st.metric("Active Breakouts", active_breakouts)
 with m3:
-    st.metric("Risk Budget", f"₹{risk_per_trade}")
+    st.metric("Risk Budget", f"₹{risk_per_trade:.0f}")
 with m4:
     st.metric("Active Route", selected_mode)
 
-st.markdown("---")
-
-# -------------------------------------------------------------
-# 11. MONITORING DATA TABLE
-# -------------------------------------------------------------
 if records:
     df_display = pd.DataFrame(records).drop(columns=["Ticker", "Size", "VWAP", "Breakout_Level", "Decimals"])
     st.dataframe(df_display, use_container_width=True, hide_index=True)
@@ -701,12 +599,12 @@ else:
     st.info(f"Currently tracking {selected_universe}. No active breakout setups found at this candle.")
 
 # -------------------------------------------------------------
-# 12. DUAL ORDER EXECUTION DESK (PAPER & REAL BROKER)
+# 10. DUAL ORDER EXECUTION DESK (PAPER & REAL BROKER)
 # -------------------------------------------------------------
 st.markdown("### ⚡ Order Execution Desk (Dual Engine: Paper + Real Broker)")
 ord_col1, ord_col2, ord_col3, ord_col4 = st.columns([1.8, 1.2, 1.2, 1.8])
 
-# Build complete clean asset list so NO asset is ever missing from dropdown
+# Complete list of assets
 available_clean_names = []
 for r in records:
     if r["Asset"] not in available_clean_names:
@@ -744,7 +642,7 @@ if selected_item:
         if default_ltp < vwap_val:
             st.error("🔴 **Setup Invalidated:** Price VWAP ke niche gir chuka hai. Entry avoid karein.")
         elif dist_pct > 0.4:
-            st.warning(f"🟡 **Overextended (+{dist_pct:.2f}%):** Chasing avoid karein, re-test ka wait karein.")
+            st.warning(f"🟡 **Overextended (+{dist_pct:.2f}%):** Retest ka wait karein.")
         else:
             st.success(f"🟢 **Safe Entry Zone (+{dist_pct:.2f}%):** Tight SL ke sath entry valid hai.")
     elif "SELL" in sig_type:
@@ -816,7 +714,7 @@ with btn_col2:
                 st.error(f"🔴 REAL BROKER ORDER FAILED: {msg}")
 
 # -------------------------------------------------------------
-# 13. COMPLETED TRADE HISTORY LEDGER
+# 11. COMPLETED TRADE HISTORY LEDGER
 # -------------------------------------------------------------
 if closed_trades:
     with st.expander("📜 Completed Paper Trades Ledger", expanded=False):
@@ -824,7 +722,7 @@ if closed_trades:
         st.dataframe(history_df, use_container_width=True, hide_index=True)
 
 # -------------------------------------------------------------
-# 14. TRADINGVIEW LIVE CHART
+# 12. TRADINGVIEW LIVE CHART
 # -------------------------------------------------------------
 st.markdown("### 📈 Interactive TradingView Live Chart")
 
