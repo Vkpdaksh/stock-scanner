@@ -15,8 +15,8 @@ from datetime import datetime, timezone, timedelta
 # ---------------------------------------------------------
 # CONFIG & SECRETS
 # ---------------------------------------------------------
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
+TELEGRAM_BOT_TOKEN = "8732059380:AAGF7qoak6yPiI5ToYGPLSVQQM4GChhKriI"
+TELEGRAM_CHAT_ID = "1527960238"
 APP_URL = "https://vkpdaksh-stock-scanner-app-ffa8vt.streamlit.app"
 PAPER_TRADES_FILE = "paper_trades.json"
 
