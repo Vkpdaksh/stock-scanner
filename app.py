@@ -101,7 +101,7 @@ def get_smartapi_session():
 def place_order_smartapi(symbol_token, trading_symbol, exchange, qty, transaction_type, price=0):
     api = get_smartapi_session()
     if not api:
-        return False, "SmartAPI credentials missing! Use Paper Trading or add Angel One secrets."
+        return False, "SmartAPI credentials missing! Add Angel One secrets or use Paper Desk."
     try:
         order_params = {
             "variety": "NORMAL",
@@ -123,7 +123,7 @@ def place_order_smartapi(symbol_token, trading_symbol, exchange, qty, transactio
         return False, str(e)
 
 # -------------------------------------------------------------
-# 3. WATCHLISTS & SECTOR INDICES (ALL 80 BLUECHIPS + INDICES)
+# 3. WATCHLISTS & TIME ROUTING (ALL 80 BLUECHIPS + ALL FOREX & COMMODITIES)
 # -------------------------------------------------------------
 SECTOR_INDICES = {
     "NIFTY BANK": "^NSEBANK",
@@ -138,27 +138,44 @@ SECTOR_INDICES = {
 
 MARKET_UNIVERSES = {
     "Indian Equities & Indices (NSE)": [
+        # Benchmark Indices
         "^NSEI", "^NSEBANK",
+        # Banking & Financials
         "HDFCBANK.NS", "ICICIBANK.NS", "SBIN.NS", "AXISBANK.NS", "KOTAKBANK.NS", 
         "INDUSINDBK.NS", "BAJFINANCE.NS", "BAJAJFINSV.NS", "SBILIFE.NS", "JIOFIN.NS", 
         "ANGELONE.NS", "BSE.NS", "CDSL.NS", "MCX.NS",
+        # IT & Tech
         "TCS.NS", "INFY.NS", "HCLTECH.NS", "WIPRO.NS", "LTIM.NS", 
         "PERSISTENT.NS", "COFORGE.NS", "TATATECH.NS",
+        # Auto & EV
         "TATAMOTORS.NS", "MARUTI.NS", "M&M.NS", "EICHERMOT.NS", "ASHOKLEY.NS", "EXIDEIND.NS",
+        # Energy & Green Infra
         "RELIANCE.NS", "ONGC.NS", "COALINDIA.NS", "NTPC.NS", "POWERGRID.NS", 
         "TATAPOWER.NS", "ADANIGREEN.NS", "SUZLON.NS", "IREDA.NS",
+        # Defence & PSU Engineering
         "HAL.NS", "BEL.NS", "BDL.NS", "BHEL.NS", "MAZDOCK.NS", "COCHINSHIP.NS",
+        # Railways & PSU Infrastructure
         "RVNL.NS", "IRFC.NS", "IRCON.NS", "RAILTEL.NS", "HUDCO.NS", "NBCC.NS",
+        # Metals & Mining
         "TATASTEEL.NS", "JSWSTEEL.NS", "HINDALCO.NS", "SAIL.NS", "NMDC.NS", "NATIONALUM.NS",
+        # Infrastructure, Capital Goods & Real Estate
         "LT.NS", "ULTRACEMCO.NS", "GRASIM.NS", "DLF.NS", "LODHA.NS",
+        # FMCG, Consumption & Retail
         "ITC.NS", "HINDUNILVR.NS", "ASIANPAINT.NS", "TATACONSUM.NS", "TITAN.NS", 
         "TRENT.NS", "ZOMATO.NS", "KALYANKJIL.NS", "DIXON.NS", "POLYCAB.NS", "KEI.NS",
+        # Pharma & Healthcare
         "SUNPHARMA.NS", "CIPLA.NS", "DRREDDY.NS", "DIVISLAB.NS", "AUROPHARMA.NS", "LUPIN.NS",
+        # Conglomerates & Ports
         "BHARTIARTL.NS", "ADANIENT.NS", "ADANIPORTS.NS"
     ],
     "Forex & Commodities": [
-        "GC=F", "SI=F", "CL=F", "HG=F", "INR=X", "EURUSD=X", 
-        "GBPUSD=X", "USDJPY=X", "AUDUSD=X", "USDCAD=X", "USDCHF=X", "NZDUSD=X"
+        # Commodities
+        "GC=F", "SI=F", "CL=F", "HG=F", "NG=F",
+        # Major Currencies
+        "INR=X", "EURUSD=X", "GBPUSD=X", "USDJPY=X", 
+        "AUDUSD=X", "USDCAD=X", "USDCHF=X", "NZDUSD=X",
+        # Cross Currency Pairs
+        "EURGBP=X", "EURJPY=X", "GBPJPY=X"
     ],
     "US Equities (NASDAQ/NYSE)": [
         "NVDA", "TSLA", "AAPL", "MSFT", "AMZN", "META", "GOOGL", "AMD", "NFLX", "PLTR",
@@ -177,6 +194,7 @@ NAME_MAP = {
     "SI=F": "XAGUSD (Silver)",
     "CL=F": "CRUDE OIL",
     "HG=F": "COPPER",
+    "NG=F": "NATURAL GAS",
     "INR=X": "USD/INR",
     "EURUSD=X": "EUR/USD",
     "GBPUSD=X": "GBP/USD",
@@ -185,9 +203,15 @@ NAME_MAP = {
     "USDCAD=X": "USD/CAD",
     "USDCHF=X": "USD/CHF",
     "NZDUSD=X": "NZD/USD",
+    "EURGBP=X": "EUR/GBP",
+    "EURJPY=X": "EUR/JPY",
+    "GBPJPY=X": "GBP/JPY",
     "BTC-USD": "BITCOIN",
     "ETH-USD": "ETHEREUM",
-    "SOL-USD": "SOLANA"
+    "SOL-USD": "SOLANA",
+    "XRP-USD": "RIPPLE",
+    "BNB-USD": "BINANCE COIN",
+    "DOGE-USD": "DOGECOIN"
 }
 
 def calculate_vwap(df):
@@ -256,10 +280,14 @@ if system_config.get("mode") != selected_mode or system_config.get("execution") 
 st.caption(f"Status: **{session_text}** | Live Feed: **{time_str}** | Profile: **{selected_mode}**")
 
 # -------------------------------------------------------------
-# 5. MARKET UNIVERSE SELECTOR (TIME-ALIGNED)
+# 5. MARKET UNIVERSE SELECTOR (TIME-ALIGNED ROUTING)
 # -------------------------------------------------------------
 available_universes = list(MARKET_UNIVERSES.keys())
 
+# Time-based automatic universe routing:
+# 09:15 AM - 03:30 PM (555 to 930 mins) -> NSE Equities
+# 03:30 PM - 09:30 PM (930 to 1290 mins) -> Forex & Commodities
+# 09:30 PM Onwards -> US Equities
 if 555 <= cur_mins <= 930:
     default_univ_index = available_universes.index("Indian Equities & Indices (NSE)")
 elif 930 < cur_mins <= 1290:
@@ -407,7 +435,7 @@ def get_live_price_for_asset(asset_name):
 all_trades = paper_data.get("trades", [])
 needs_save = False
 
-# Indian market squareoff time check (past 3:15 PM IST or before 9:00 AM IST)
+# 3:15 PM square off check
 is_past_315 = (ist_now.hour > 15) or (ist_now.hour == 15 and ist_now.minute >= 15) or (ist_now.hour < 9)
 
 for trade in all_trades:
@@ -424,14 +452,15 @@ for trade in all_trades:
         sl_hit = (side_type == "BUY" and c_ltp <= s_price) or (side_type == "SELL" and c_ltp >= s_price)
         tp_hit = (side_type == "BUY" and c_ltp >= t_price) or (side_type == "SELL" and c_ltp <= t_price)
         
-        # Check if asset belongs to Forex, Commodities, Crypto or US Equities
+        # Check whether the asset belongs to Forex, Commodities, Crypto or US Equities
         is_global_asset = any(fx in str(a_name).upper() for fx in [
             "USD", "EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "NZD", 
-            "BTC", "ETH", "SOL", "XAU", "XAG", "CRUDE", "COPPER", 
-            "NVDA", "TSLA", "AAPL", "MSFT", "AMZN", "META", "GOOGL", "AMD", "NFLX", "PLTR"
+            "BTC", "ETH", "SOL", "XAU", "XAG", "CRUDE", "COPPER", "GOLD", "SILVER", "GAS",
+            "NVDA", "TSLA", "AAPL", "MSFT", "AMZN", "META", "GOOGL", "AMD", "NFLX", "PLTR",
+            "AVGO", "SMCI", "ARM", "QCOM", "INTC", "MU", "PANW", "CRWD", "COIN", "MSTR"
         ])
 
-        # 3:15 PM Square off ONLY applies to Indian Equities
+        # 3:15 PM Square off ONLY applies to Indian Equities (NSE)
         if is_global_asset:
             intraday_expired = False
         else:
@@ -538,7 +567,7 @@ if open_trades:
         sl_price = trade.get('sl')
         tp1_price = trade.get('tp1')
         
-        is_fx = any(fx in str(asset_name).upper() for fx in ["USD", "EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "NZD", "BTC", "ETH", "SOL", "XAU", "XAG"])
+        is_fx = any(fx in str(asset_name).upper() for fx in ["USD", "EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "NZD", "BTC", "ETH", "SOL", "XAU", "XAG", "GOLD", "SILVER"])
         fmt = "{:+,.4f}" if is_fx else "{:+,.2f}"
         disp_fmt = "{:.4f}" if is_fx else "{:.2f}"
 
@@ -654,7 +683,7 @@ else:
     st.info("No active breakout setups currently found in this asset pool.")
 
 # -------------------------------------------------------------
-# 12. DUAL ORDER EXECUTION DESK (PAPER & REAL FUND)
+# 12. DUAL ORDER EXECUTION DESK (PAPER & REAL BROKER)
 # -------------------------------------------------------------
 st.markdown("### ⚡ Order Execution Desk (Dual Engine: Paper + Real Broker)")
 ord_col1, ord_col2, ord_col3, ord_col4 = st.columns([1.8, 1.2, 1.2, 1.8])
@@ -668,9 +697,8 @@ default_ltp = selected_item["LTP"] if selected_item else 100.0
 default_sl = selected_item["Stop Loss"] if selected_item else round(default_ltp * 0.99, 2)
 default_tp = selected_item["Target 1 (1:1)"] if selected_item else round(default_ltp * 1.01, 2)
 
-# Dynamic 4-digit / 2-digit decimals calculation
 is_forex_asset = any(fx in str(chosen_asset).upper() for fx in [
-    "USD", "EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "NZD", "INR", "XAU", "XAG"
+    "USD", "EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "NZD", "INR", "GOLD", "SILVER", "XAU", "XAG", "GAS"
 ])
 dec_format = "%.4f" if is_forex_asset else "%.2f"
 dec_step = 0.0001 if is_forex_asset else 0.05
@@ -781,7 +809,7 @@ if not chart_candidates and tickers:
 
 c_sel_col1, c_sel_col2 = st.columns([3, 1])
 with c_sel_col1:
-    chart_asset = st.selectbox("Select Asset to View Chart:", chart_candidates if chart_candidates else ["ITC"])
+    chart_asset = st.selectbox("Select Asset to View Chart:", chart_candidates if chart_candidates else ["NIFTY 50"])
 
 target_ticker = None
 for r in records:
@@ -797,7 +825,7 @@ if not target_ticker:
             break
 
 if not target_ticker:
-    target_ticker = "ITC.NS"
+    target_ticker = "^NSEI"
 
 tv_interval = "15"
 if ".NS" in target_ticker:
@@ -821,11 +849,41 @@ elif target_ticker == "CL=F":
 elif target_ticker == "HG=F":
     tv_symbol = "COMEX:HG1!"
     tv_interval = "15"
+elif target_ticker == "NG=F":
+    tv_symbol = "NYMEX:NG1!"
+    tv_interval = "15"
 elif target_ticker == "INR=X":
     tv_symbol = "FX_IDC:USDINR"
     tv_interval = "15"
 elif target_ticker == "EURUSD=X":
     tv_symbol = "FX:EURUSD"
+    tv_interval = "15"
+elif target_ticker == "GBPUSD=X":
+    tv_symbol = "FX:GBPUSD"
+    tv_interval = "15"
+elif target_ticker == "USDJPY=X":
+    tv_symbol = "FX:USDJPY"
+    tv_interval = "15"
+elif target_ticker == "AUDUSD=X":
+    tv_symbol = "FX:AUDUSD"
+    tv_interval = "15"
+elif target_ticker == "USDCAD=X":
+    tv_symbol = "FX:USDCAD"
+    tv_interval = "15"
+elif target_ticker == "USDCHF=X":
+    tv_symbol = "FX:USDCHF"
+    tv_interval = "15"
+elif target_ticker == "NZDUSD=X":
+    tv_symbol = "FX:NZDUSD"
+    tv_interval = "15"
+elif target_ticker == "EURGBP=X":
+    tv_symbol = "FX:EURGBP"
+    tv_interval = "15"
+elif target_ticker == "EURJPY=X":
+    tv_symbol = "FX:EURJPY"
+    tv_interval = "15"
+elif target_ticker == "GBPJPY=X":
+    tv_symbol = "FX:GBPJPY"
     tv_interval = "15"
 elif "-USD" in target_ticker:
     tv_symbol = "BINANCE:" + target_ticker.replace("-USD", "USDT")
