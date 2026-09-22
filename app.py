@@ -123,7 +123,7 @@ def place_order_smartapi(symbol_token, trading_symbol, exchange, qty, transactio
         return False, str(e)
 
 # -------------------------------------------------------------
-# 3. WATCHLISTS & ASSETS UNIVERSE (ALL 80 STOCKS + COMMODITIES + FOREX + US)
+# 3. WATCHLISTS & ASSETS
 # -------------------------------------------------------------
 SECTOR_INDICES = {
     "NIFTY BANK": "^NSEBANK",
@@ -172,8 +172,6 @@ CRYPTO_ASSETS = [
     "BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD", "BNB-USD",
     "ADA-USD", "DOGE-USD", "AVAX-USD", "LINK-USD", "SUI-USD"
 ]
-
-ALL_SYSTEM_ASSETS = NSE_EQUITIES + COMMODITIES_AND_FOREX + US_EQUITIES + CRYPTO_ASSETS
 
 MARKET_UNIVERSES = {
     "Indian Equities & Indices (NSE)": NSE_EQUITIES,
@@ -262,7 +260,7 @@ if system_config.get("mode") != selected_mode or system_config.get("execution") 
 st.caption(f"Status: **{session_text}** | Live Feed: **{time_str}** | Profile: **{selected_mode}**")
 
 # -------------------------------------------------------------
-# 5. RISK MANAGEMENT & DISCIPLINE ALLOCATION DESK
+# 5. RISK ALLOCATION & CAPITAL DESK
 # -------------------------------------------------------------
 st.markdown("### 🛡️ Risk Management & Capital Allocation Desk")
 r_col1, r_col2, r_col3, r_col4 = st.columns(4)
@@ -286,18 +284,17 @@ with r_col4:
 actual_risk_pct = (risk_per_trade / account_capital) * 100 if account_capital > 0 else 0
 
 if actual_risk_pct > 2.0:
-    st.error(f"🚨 **High Risk Alert:** Selected risk is **{actual_risk_pct:.1f}%** of capital! Strictly recommend keeping risk under 2% (₹{safe_budget:.0f}).")
+    st.error(f"🚨 **High Risk Alert:** Selected risk is **{actual_risk_pct:.1f}%** of capital! Keep risk under 2% (₹{safe_budget:.0f}).")
 else:
-    st.success(f"✅ **Disciplined Risk:** Risk per trade is **{actual_risk_pct:.1f}%** (₹{risk_per_trade:.0f} per trade | Max Daily Loss: ₹{max_daily_loss:.0f}).")
+    st.success(f"✅ **Disciplined Risk:** Risk is **{actual_risk_pct:.1f}%** (₹{risk_per_trade:.0f} per trade | Daily Max Loss: ₹{max_daily_loss:.0f}).")
 
 st.markdown("---")
 
 # -------------------------------------------------------------
-# 6. MARKET UNIVERSE SELECTOR (TIME-ALIGNED ROUTING)
+# 6. MARKET UNIVERSE SELECTOR
 # -------------------------------------------------------------
 available_universes = list(MARKET_UNIVERSES.keys())
 
-# Time routing: 9:15 AM - 3:30 PM (NSE), 3:30 PM - 9:30 PM (Forex/Commodities), 9:30 PM+ (US Equities)
 if 555 <= cur_mins <= 930:
     default_univ_index = available_universes.index("Indian Equities & Indices (NSE)")
 elif 930 < cur_mins <= 1290:
@@ -449,7 +446,7 @@ def get_live_price_for_asset(asset_name):
 all_trades = paper_data.get("trades", [])
 needs_save = False
 
-# 3:15 PM square off strictly for Indian Equities
+# 3:15 PM square off check
 is_past_315 = (ist_now.hour > 15) or (ist_now.hour == 15 and ist_now.minute >= 15) or (ist_now.hour < 9)
 
 for trade in all_trades:
@@ -466,7 +463,6 @@ for trade in all_trades:
         sl_hit = (side_type == "BUY" and c_ltp <= s_price) or (side_type == "SELL" and c_ltp >= s_price)
         tp_hit = (side_type == "BUY" and c_ltp >= t_price) or (side_type == "SELL" and c_ltp <= t_price)
         
-        # Check global asset status
         is_global_asset = any(fx in str(a_name).upper() for fx in [
             "USD", "EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "NZD", 
             "BTC", "ETH", "SOL", "XAU", "XAG", "CRUDE", "COPPER", "GOLD", "SILVER", "GAS",
@@ -604,19 +600,12 @@ else:
 st.markdown("### ⚡ Order Execution Desk (Dual Engine: Paper + Real Broker)")
 ord_col1, ord_col2, ord_col3, ord_col4 = st.columns([1.8, 1.2, 1.2, 1.8])
 
-# Complete list of assets
-available_clean_names = []
-for r in records:
-    if r["Asset"] not in available_clean_names:
-        available_clean_names.append(r["Asset"])
-
-for sym in ALL_SYSTEM_ASSETS:
-    mapped = NAME_MAP.get(sym, sym.replace(".NS", "").replace("^", "").replace("-USD", ""))
-    if mapped not in available_clean_names:
-        available_clean_names.append(mapped)
+records_assets = [r["Asset"] for r in records] if records else []
+all_extra_assets = [NAME_MAP.get(t, t.replace(".NS", "").replace("^", "").replace("-USD", "")) for t in tickers]
+available_clean_names = sorted(list(set(records_assets + all_extra_assets)))
 
 with ord_col1:
-    chosen_asset = st.selectbox("Contract / Asset:", available_clean_names)
+    chosen_asset = st.selectbox("Contract / Asset:", available_clean_names if available_clean_names else ["None"])
 
 selected_item = next((r for r in records if r["Asset"] == chosen_asset), None)
 live_val = get_live_price_for_asset(chosen_asset) or 100.0
@@ -722,97 +711,77 @@ if closed_trades:
         st.dataframe(history_df, use_container_width=True, hide_index=True)
 
 # -------------------------------------------------------------
-# 12. TRADINGVIEW LIVE CHART
+# 12. TRADINGVIEW LIVE CHART (FIXED SYMBOLS FOR ALL ASSETS)
 # -------------------------------------------------------------
 st.markdown("### 📈 Interactive TradingView Live Chart")
 
 c_sel_col1, c_sel_col2 = st.columns([3, 1])
 with c_sel_col1:
-    chart_asset = st.selectbox("Select Asset to View Chart:", available_clean_names, index=0)
+    chart_asset = st.selectbox("Select Asset to View Chart:", available_clean_names if available_clean_names else ["ALPHABET (GOOGLE)"])
 
-target_ticker = None
-for r in records:
-    if r["Asset"] == chart_asset:
-        target_ticker = r["Ticker"]
-        break
+# Exact TradingView symbol resolution
+tv_symbol_map = {
+    "ALPHABET (GOOGLE)": "NASDAQ:GOOGL",
+    "GOOGLE": "NASDAQ:GOOGL",
+    "GOOGL": "NASDAQ:GOOGL",
+    "NVIDIA": "NASDAQ:NVDA",
+    "NVDA": "NASDAQ:NVDA",
+    "TESLA": "NASDAQ:TSLA",
+    "TSLA": "NASDAQ:TSLA",
+    "APPLE": "NASDAQ:AAPL",
+    "AAPL": "NASDAQ:AAPL",
+    "MICROSOFT": "NASDAQ:MSFT",
+    "MSFT": "NASDAQ:MSFT",
+    "AMAZON": "NASDAQ:AMZN",
+    "AMZN": "NASDAQ:AMZN",
+    "META PLATFORMS": "NASDAQ:META",
+    "META": "NASDAQ:META",
+    "AMD": "NASDAQ:AMD",
+    "NFLX": "NASDAQ:NFLX",
+    "PLTR": "NASDAQ:PLTR",
+    "NIFTY 50": "NSE:NIFTY",
+    "BANK NIFTY": "NSE:BANKNIFTY",
+    "XAUUSD (Gold)": "TVC:GOLD",
+    "XAGUSD (Silver)": "TVC:SILVER",
+    "CRUDE OIL": "TVC:USOIL",
+    "COPPER": "COMEX:HG1!",
+    "NATURAL GAS": "NYMEX:NG1!",
+    "USD/INR": "FX_IDC:USDINR",
+    "EUR/USD": "FX:EURUSD",
+    "GBP/USD": "FX:GBPUSD",
+    "USD/JPY": "FX:USDJPY",
+    "AUD/USD": "FX:AUDUSD",
+    "USD/CAD": "FX:USDCAD",
+    "USD/CHF": "FX:USDCHF",
+    "NZD/USD": "FX:NZDUSD",
+    "EUR/GBP": "FX:EURGBP",
+    "EUR/JPY": "FX:EURJPY",
+    "GBP/JPY": "FX:GBPJPY",
+    "BITCOIN": "BINANCE:BTCUSDT",
+    "ETHEREUM": "BINANCE:ETHUSDT",
+    "SOLANA": "BINANCE:SOLUSDT"
+}
 
-if not target_ticker:
-    for t in ALL_SYSTEM_ASSETS:
-        d_name = NAME_MAP.get(t, t.replace(".NS", "").replace("^", "").replace("-USD", ""))
-        if d_name == chart_asset or t == chart_asset:
-            target_ticker = t
+if chart_asset in tv_symbol_map:
+    tv_symbol = tv_symbol_map[chart_asset]
+else:
+    found_t = None
+    for t, m in NAME_MAP.items():
+        if m == chart_asset:
+            found_t = t
             break
-
-if not target_ticker:
-    target_ticker = "GOOGL"
+    if found_t:
+        if ".NS" in found_t:
+            tv_symbol = "NSE:" + found_t.replace(".NS", "")
+        else:
+            tv_symbol = "NASDAQ:" + found_t
+    else:
+        tv_symbol = "NSE:" + chart_asset.replace(".NS", "")
 
 tv_interval = "15"
-if ".NS" in target_ticker:
-    tv_symbol = "NSE:" + target_ticker.replace(".NS", "")
-    tv_interval = "D"
-elif target_ticker == "^NSEI":
-    tv_symbol = "NSE:NIFTY"
-    tv_interval = "D"
-elif target_ticker == "^NSEBANK":
-    tv_symbol = "NSE:BANKNIFTY"
-    tv_interval = "D"
-elif target_ticker == "GC=F":
-    tv_symbol = "TVC:GOLD"
-    tv_interval = "15"
-elif target_ticker == "SI=F":
-    tv_symbol = "TVC:SILVER"
-    tv_interval = "15"
-elif target_ticker == "CL=F":
-    tv_symbol = "TVC:USOIL"
-    tv_interval = "15"
-elif target_ticker == "HG=F":
-    tv_symbol = "COMEX:HG1!"
-    tv_interval = "15"
-elif target_ticker == "NG=F":
-    tv_symbol = "NYMEX:NG1!"
-    tv_interval = "15"
-elif target_ticker == "INR=X":
-    tv_symbol = "FX_IDC:USDINR"
-    tv_interval = "15"
-elif target_ticker == "EURUSD=X":
-    tv_symbol = "FX:EURUSD"
-    tv_interval = "15"
-elif target_ticker == "GBPUSD=X":
-    tv_symbol = "FX:GBPUSD"
-    tv_interval = "15"
-elif target_ticker == "USDJPY=X":
-    tv_symbol = "FX:USDJPY"
-    tv_interval = "15"
-elif target_ticker == "AUDUSD=X":
-    tv_symbol = "FX:AUDUSD"
-    tv_interval = "15"
-elif target_ticker == "USDCAD=X":
-    tv_symbol = "FX:USDCAD"
-    tv_interval = "15"
-elif target_ticker == "USDCHF=X":
-    tv_symbol = "FX:USDCHF"
-    tv_interval = "15"
-elif target_ticker == "NZDUSD=X":
-    tv_symbol = "FX:NZDUSD"
-    tv_interval = "15"
-elif target_ticker == "EURGBP=X":
-    tv_symbol = "FX:EURGBP"
-    tv_interval = "15"
-elif target_ticker == "EURJPY=X":
-    tv_symbol = "FX:EURJPY"
-    tv_interval = "15"
-elif target_ticker == "GBPJPY=X":
-    tv_symbol = "FX:GBPJPY"
-    tv_interval = "15"
-elif "-USD" in target_ticker:
-    tv_symbol = "BINANCE:" + target_ticker.replace("-USD", "USDT")
-    tv_interval = "15"
-else:
-    tv_symbol = "NASDAQ:" + target_ticker
-    tv_interval = "15"
 
 with c_sel_col2:
-    st.caption(f"Symbol: **{tv_symbol}** | Timeframe: **{tv_interval}**")
+    st.caption(f"TradingView Code: **{tv_symbol}** | Timeframe: **{tv_interval}m**")
 
 tv_code = f"""
 <div class="tradingview-widget-container" style="height:550px; width:100%;">
