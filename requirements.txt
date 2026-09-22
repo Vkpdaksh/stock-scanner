@@ -3,7 +3,8 @@ pandas
 numpy
 yfinance
 ta
+python-telegram-bot
+mplfinance
+matplotlib
 pyotp
 smartapi-python
-requests
-matplotlib
