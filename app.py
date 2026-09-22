@@ -632,16 +632,17 @@ with ord_col2:
 with ord_col3:
     suggested_qty = selected_item["Size"] if selected_item else 1
     qty_input = st.number_input("Qty / Lots:", min_value=1, value=max(1, suggested_qty), step=1)
-
+is_forex_asset = any(fx in str(chosen_asset) for fx in ["USD", "EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "NZD", "INR"])
+dec_format = "%.4f" if is_forex_asset else "%.2f"
+dec_step = 0.0001 if is_forex_asset else 0.05
 with ord_col4:
-    custom_exec_price = st.number_input("Execution Price (₹):", min_value=0.01, value=float(default_ltp), step=0.05, format="%.2f")
+  custom_exec_price = st.number_input("Execution Price:", min_value=0.0001, value=float(default_ltp), step=dec_step, format=dec_format)
 
 sl_tp_col1, sl_tp_col2 = st.columns(2)
 with sl_tp_col1:
-    custom_sl = st.number_input("Stop Loss (SL ₹):", min_value=0.01, value=float(default_sl), step=0.05, format="%.2f")
+    custom_sl = st.number_input("Stop Loss (SL):", min_value=0.0001, value=float(default_sl), step=dec_step, format=dec_format)
 with sl_tp_col2:
-    custom_tp = st.number_input("Target Price (TP ₹):", min_value=0.01, value=float(default_tp), step=0.05, format="%.2f")
-
+    custom_tp = st.number_input("Target Price (TP):", min_value=0.0001, value=float(default_tp), step=dec_step, format=dec_format)
 st.write("")
 if st.button("📥 Record Virtual Paper Trade", use_container_width=True):
     if selected_item:
