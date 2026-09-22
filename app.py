@@ -123,7 +123,7 @@ def place_order_smartapi(symbol_token, trading_symbol, exchange, qty, transactio
         return False, str(e)
 
 # -------------------------------------------------------------
-# 3. WATCHLISTS & TIME ROUTING (ALL 80 BLUECHIPS + ALL FOREX & COMMODITIES)
+# 3. WATCHLISTS & ASSETS UNIVERSE (ALL 80 STOCKS + COMMODITIES + FOREX + US)
 # -------------------------------------------------------------
 SECTOR_INDICES = {
     "NIFTY BANK": "^NSEBANK",
@@ -136,55 +136,65 @@ SECTOR_INDICES = {
     "NIFTY REALTY": "^CNXREALTY"
 }
 
+NSE_EQUITIES = [
+    # Benchmark Indices
+    "^NSEI", "^NSEBANK",
+    # Banking & Financials
+    "HDFCBANK.NS", "ICICIBANK.NS", "SBIN.NS", "AXISBANK.NS", "KOTAKBANK.NS", 
+    "INDUSINDBK.NS", "BAJFINANCE.NS", "BAJAJFINSV.NS", "SBILIFE.NS", "JIOFIN.NS", 
+    "ANGELONE.NS", "BSE.NS", "CDSL.NS", "MCX.NS",
+    # IT & Tech
+    "TCS.NS", "INFY.NS", "HCLTECH.NS", "WIPRO.NS", "LTIM.NS", 
+    "PERSISTENT.NS", "COFORGE.NS", "TATATECH.NS",
+    # Auto & EV
+    "TATAMOTORS.NS", "MARUTI.NS", "M&M.NS", "EICHERMOT.NS", "ASHOKLEY.NS", "EXIDEIND.NS",
+    # Energy & Green Infra
+    "RELIANCE.NS", "ONGC.NS", "COALINDIA.NS", "NTPC.NS", "POWERGRID.NS", 
+    "TATAPOWER.NS", "ADANIGREEN.NS", "SUZLON.NS", "IREDA.NS",
+    # Defence & PSU Engineering
+    "HAL.NS", "BEL.NS", "BDL.NS", "BHEL.NS", "MAZDOCK.NS", "COCHINSHIP.NS",
+    # Railways & PSU Infrastructure
+    "RVNL.NS", "IRFC.NS", "IRCON.NS", "RAILTEL.NS", "HUDCO.NS", "NBCC.NS",
+    # Metals & Mining
+    "TATASTEEL.NS", "JSWSTEEL.NS", "HINDALCO.NS", "SAIL.NS", "NMDC.NS", "NATIONALUM.NS",
+    # Infrastructure, Capital Goods & Real Estate
+    "LT.NS", "ULTRACEMCO.NS", "GRASIM.NS", "DLF.NS", "LODHA.NS",
+    # FMCG, Consumption & Retail
+    "ITC.NS", "HINDUNILVR.NS", "ASIANPAINT.NS", "TATACONSUM.NS", "TITAN.NS", 
+    "TRENT.NS", "ZOMATO.NS", "KALYANKJIL.NS", "DIXON.NS", "POLYCAB.NS", "KEI.NS",
+    # Pharma & Healthcare
+    "SUNPHARMA.NS", "CIPLA.NS", "DRREDDY.NS", "DIVISLAB.NS", "AUROPHARMA.NS", "LUPIN.NS",
+    # Conglomerates & Ports
+    "BHARTIARTL.NS", "ADANIENT.NS", "ADANIPORTS.NS"
+]
+
+COMMODITIES_AND_FOREX = [
+    # Commodities
+    "GC=F", "SI=F", "CL=F", "HG=F", "NG=F",
+    # Major Currencies
+    "INR=X", "EURUSD=X", "GBPUSD=X", "USDJPY=X", 
+    "AUDUSD=X", "USDCAD=X", "USDCHF=X", "NZDUSD=X",
+    # Cross Currency Pairs
+    "EURGBP=X", "EURJPY=X", "GBPJPY=X"
+]
+
+US_EQUITIES = [
+    "GOOGL", "NVDA", "TSLA", "AAPL", "MSFT", "AMZN", "META", "AMD", "NFLX", "PLTR",
+    "AVGO", "SMCI", "ARM", "QCOM", "INTC", "MU", "PANW", "CRWD", "COIN", "MSTR"
+]
+
+CRYPTO_ASSETS = [
+    "BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD", "BNB-USD",
+    "ADA-USD", "DOGE-USD", "AVAX-USD", "LINK-USD", "SUI-USD"
+]
+
+ALL_SYSTEM_ASSETS = NSE_EQUITIES + COMMODITIES_AND_FOREX + US_EQUITIES + CRYPTO_ASSETS
+
 MARKET_UNIVERSES = {
-    "Indian Equities & Indices (NSE)": [
-        # Benchmark Indices
-        "^NSEI", "^NSEBANK",
-        # Banking & Financials
-        "HDFCBANK.NS", "ICICIBANK.NS", "SBIN.NS", "AXISBANK.NS", "KOTAKBANK.NS", 
-        "INDUSINDBK.NS", "BAJFINANCE.NS", "BAJAJFINSV.NS", "SBILIFE.NS", "JIOFIN.NS", 
-        "ANGELONE.NS", "BSE.NS", "CDSL.NS", "MCX.NS",
-        # IT & Tech
-        "TCS.NS", "INFY.NS", "HCLTECH.NS", "WIPRO.NS", "LTIM.NS", 
-        "PERSISTENT.NS", "COFORGE.NS", "TATATECH.NS",
-        # Auto & EV
-        "TATAMOTORS.NS", "MARUTI.NS", "M&M.NS", "EICHERMOT.NS", "ASHOKLEY.NS", "EXIDEIND.NS",
-        # Energy & Green Infra
-        "RELIANCE.NS", "ONGC.NS", "COALINDIA.NS", "NTPC.NS", "POWERGRID.NS", 
-        "TATAPOWER.NS", "ADANIGREEN.NS", "SUZLON.NS", "IREDA.NS",
-        # Defence & PSU Engineering
-        "HAL.NS", "BEL.NS", "BDL.NS", "BHEL.NS", "MAZDOCK.NS", "COCHINSHIP.NS",
-        # Railways & PSU Infrastructure
-        "RVNL.NS", "IRFC.NS", "IRCON.NS", "RAILTEL.NS", "HUDCO.NS", "NBCC.NS",
-        # Metals & Mining
-        "TATASTEEL.NS", "JSWSTEEL.NS", "HINDALCO.NS", "SAIL.NS", "NMDC.NS", "NATIONALUM.NS",
-        # Infrastructure, Capital Goods & Real Estate
-        "LT.NS", "ULTRACEMCO.NS", "GRASIM.NS", "DLF.NS", "LODHA.NS",
-        # FMCG, Consumption & Retail
-        "ITC.NS", "HINDUNILVR.NS", "ASIANPAINT.NS", "TATACONSUM.NS", "TITAN.NS", 
-        "TRENT.NS", "ZOMATO.NS", "KALYANKJIL.NS", "DIXON.NS", "POLYCAB.NS", "KEI.NS",
-        # Pharma & Healthcare
-        "SUNPHARMA.NS", "CIPLA.NS", "DRREDDY.NS", "DIVISLAB.NS", "AUROPHARMA.NS", "LUPIN.NS",
-        # Conglomerates & Ports
-        "BHARTIARTL.NS", "ADANIENT.NS", "ADANIPORTS.NS"
-    ],
-    "Forex & Commodities": [
-        # Commodities
-        "GC=F", "SI=F", "CL=F", "HG=F", "NG=F",
-        # Major Currencies
-        "INR=X", "EURUSD=X", "GBPUSD=X", "USDJPY=X", 
-        "AUDUSD=X", "USDCAD=X", "USDCHF=X", "NZDUSD=X",
-        # Cross Currency Pairs
-        "EURGBP=X", "EURJPY=X", "GBPJPY=X"
-    ],
-    "US Equities (NASDAQ/NYSE)": [
-        "NVDA", "TSLA", "AAPL", "MSFT", "AMZN", "META", "GOOGL", "AMD", "NFLX", "PLTR",
-        "AVGO", "SMCI", "ARM", "QCOM", "INTC", "MU", "PANW", "CRWD", "COIN", "MSTR"
-    ],
-    "Crypto (24x7)": [
-        "BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD", "BNB-USD",
-        "ADA-USD", "DOGE-USD", "AVAX-USD", "LINK-USD", "SUI-USD"
-    ]
+    "US Equities (NASDAQ/NYSE)": US_EQUITIES,
+    "Forex & Commodities": COMMODITIES_AND_FOREX,
+    "Indian Equities & Indices (NSE)": NSE_EQUITIES,
+    "Crypto (24x7)": CRYPTO_ASSETS
 }
 
 NAME_MAP = {
@@ -211,7 +221,14 @@ NAME_MAP = {
     "SOL-USD": "SOLANA",
     "XRP-USD": "RIPPLE",
     "BNB-USD": "BINANCE COIN",
-    "DOGE-USD": "DOGECOIN"
+    "DOGE-USD": "DOGECOIN",
+    "GOOGL": "ALPHABET (GOOGLE)",
+    "NVDA": "NVIDIA",
+    "TSLA": "TESLA",
+    "AAPL": "APPLE",
+    "MSFT": "MICROSOFT",
+    "AMZN": "AMAZON",
+    "META": "META PLATFORMS"
 }
 
 def calculate_vwap(df):
@@ -284,18 +301,13 @@ st.caption(f"Status: **{session_text}** | Live Feed: **{time_str}** | Profile: *
 # -------------------------------------------------------------
 available_universes = list(MARKET_UNIVERSES.keys())
 
-# Time-based automatic universe routing:
-# 09:15 AM - 03:30 PM (555 to 930 mins) -> NSE Equities
-# 03:30 PM - 09:30 PM (930 to 1290 mins) -> Forex & Commodities
-# 09:30 PM Onwards -> US Equities
+# Time routing: 9:15 AM - 3:30 PM (NSE), 3:30 PM - 9:30 PM (Forex/Commodities), 9:30 PM+ (US Equities)
 if 555 <= cur_mins <= 930:
     default_univ_index = available_universes.index("Indian Equities & Indices (NSE)")
 elif 930 < cur_mins <= 1290:
     default_univ_index = available_universes.index("Forex & Commodities")
-elif cur_mins > 1290:
-    default_univ_index = available_universes.index("US Equities (NASDAQ/NYSE)")
 else:
-    default_univ_index = 0
+    default_univ_index = available_universes.index("US Equities (NASDAQ/NYSE)")
 
 selected_universe = st.selectbox("Active Asset Universe (Auto-Switches by Time):", available_universes, index=default_univ_index)
 tickers = MARKET_UNIVERSES[selected_universe]
@@ -414,7 +426,7 @@ def get_live_price_for_asset(asset_name):
     if m:
         return m["LTP"]
     for t, mapped in NAME_MAP.items():
-        if mapped == asset_name:
+        if mapped == asset_name or t == asset_name:
             try:
                 t_df = yf.download(t, period="1d", interval="15m", progress=False)
                 if not t_df.empty:
@@ -423,6 +435,12 @@ def get_live_price_for_asset(asset_name):
                 pass
     try:
         t_df = yf.download(f"{asset_name}.NS", period="1d", interval="15m", progress=False)
+        if not t_df.empty:
+            return float(t_df['Close'].dropna().iloc[-1])
+    except Exception:
+        pass
+    try:
+        t_df = yf.download(asset_name, period="1d", interval="15m", progress=False)
         if not t_df.empty:
             return float(t_df['Close'].dropna().iloc[-1])
     except Exception:
@@ -456,7 +474,7 @@ for trade in all_trades:
         is_global_asset = any(fx in str(a_name).upper() for fx in [
             "USD", "EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "NZD", 
             "BTC", "ETH", "SOL", "XAU", "XAG", "CRUDE", "COPPER", "GOLD", "SILVER", "GAS",
-            "NVDA", "TSLA", "AAPL", "MSFT", "AMZN", "META", "GOOGL", "AMD", "NFLX", "PLTR",
+            "GOOGLE", "ALPHABET", "GOOGL", "NVDA", "TSLA", "AAPL", "MSFT", "AMZN", "META", "AMD", "NFLX", "PLTR",
             "AVGO", "SMCI", "ARM", "QCOM", "INTC", "MU", "PANW", "CRWD", "COIN", "MSTR"
         ])
 
@@ -680,22 +698,34 @@ if records:
     df_display = pd.DataFrame(records).drop(columns=["Ticker", "Size", "VWAP", "Breakout_Level", "Decimals"])
     st.dataframe(df_display, use_container_width=True, hide_index=True)
 else:
-    st.info("No active breakout setups currently found in this asset pool.")
+    st.info(f"Currently tracking {selected_universe}. No active breakout setups found at this candle.")
 
 # -------------------------------------------------------------
 # 12. DUAL ORDER EXECUTION DESK (PAPER & REAL BROKER)
 # -------------------------------------------------------------
 st.markdown("### ⚡ Order Execution Desk (Dual Engine: Paper + Real Broker)")
 ord_col1, ord_col2, ord_col3, ord_col4 = st.columns([1.8, 1.2, 1.2, 1.8])
-asset_names = [r["Asset"] for r in records] if records else []
+
+# Build complete clean asset list so NO asset is ever missing from dropdown
+available_clean_names = []
+for r in records:
+    if r["Asset"] not in available_clean_names:
+        available_clean_names.append(r["Asset"])
+
+for sym in ALL_SYSTEM_ASSETS:
+    mapped = NAME_MAP.get(sym, sym.replace(".NS", "").replace("^", "").replace("-USD", ""))
+    if mapped not in available_clean_names:
+        available_clean_names.append(mapped)
 
 with ord_col1:
-    chosen_asset = st.selectbox("Contract / Asset:", asset_names if asset_names else ["None"])
+    chosen_asset = st.selectbox("Contract / Asset:", available_clean_names)
 
 selected_item = next((r for r in records if r["Asset"] == chosen_asset), None)
-default_ltp = selected_item["LTP"] if selected_item else 100.0
-default_sl = selected_item["Stop Loss"] if selected_item else round(default_ltp * 0.99, 2)
-default_tp = selected_item["Target 1 (1:1)"] if selected_item else round(default_ltp * 1.01, 2)
+live_val = get_live_price_for_asset(chosen_asset) or 100.0
+
+default_ltp = selected_item["LTP"] if selected_item else live_val
+default_sl = selected_item["Stop Loss"] if selected_item else round(default_ltp * 0.99, 4 if ("=" in str(chosen_asset) or "USD" in str(chosen_asset)) else 2)
+default_tp = selected_item["Target 1 (1:1)"] if selected_item else round(default_ltp * 1.01, 4 if ("=" in str(chosen_asset) or "USD" in str(chosen_asset)) else 2)
 
 is_forex_asset = any(fx in str(chosen_asset).upper() for fx in [
     "USD", "EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "NZD", "INR", "GOLD", "SILVER", "XAU", "XAG", "GAS"
@@ -747,31 +777,28 @@ btn_col1, btn_col2 = st.columns(2)
 
 with btn_col1:
     if st.button("📥 Record Virtual Paper Trade", use_container_width=True):
-        if selected_item:
-            new_trade = {
-                "date": ist_now.strftime("%Y-%m-%d %H:%M"),
-                "asset": chosen_asset,
-                "type": side,
-                "entry": custom_exec_price,
-                "sl": custom_sl,
-                "tp1": custom_tp,
-                "tp2": selected_item.get("Target 2 (1:2)", custom_tp),
-                "qty": qty_input,
-                "status": "OPEN"
-            }
-            paper_data["trades"].append(new_trade)
-            save_json(PAPER_TRADES_FILE, paper_data)
-            st.success(f"✅ Virtual {side} Recorded for {chosen_asset} at {custom_exec_price} | SL: {custom_sl} | TP: {custom_tp}!")
-            st.rerun()
-        else:
-            st.warning("Pehle koi valid asset select karein.")
+        new_trade = {
+            "date": ist_now.strftime("%Y-%m-%d %H:%M"),
+            "asset": chosen_asset,
+            "type": side,
+            "entry": custom_exec_price,
+            "sl": custom_sl,
+            "tp1": custom_tp,
+            "tp2": selected_item.get("Target 2 (1:2)", custom_tp) if selected_item else custom_tp,
+            "qty": qty_input,
+            "status": "OPEN"
+        }
+        paper_data["trades"].append(new_trade)
+        save_json(PAPER_TRADES_FILE, paper_data)
+        st.success(f"✅ Virtual {side} Recorded for {chosen_asset} at {custom_exec_price} | SL: {custom_sl} | TP: {custom_tp}!")
+        st.rerun()
 
 with btn_col2:
     if st.button("🚀 Fire Real Order (Angel One)", use_container_width=True):
         if is_beginner:
             st.error("Beginner mode me Real Trading locked hai. Top profile se 'Pro Trader (Full)' select karein.")
-        elif selected_item:
-            raw_sym = selected_item["Ticker"]
+        else:
+            raw_sym = selected_item["Ticker"] if selected_item else chosen_asset
             exch = "NSE" if ".NS" in raw_sym or "^NSE" in raw_sym else "MCX"
             clean_sym = raw_sym.replace(".NS", "").replace("^", "")
             
@@ -787,8 +814,6 @@ with btn_col2:
                 st.success(f"🟢 REAL BROKER ORDER: {msg}")
             else:
                 st.error(f"🔴 REAL BROKER ORDER FAILED: {msg}")
-        else:
-            st.warning("Pehle koi valid asset select karein.")
 
 # -------------------------------------------------------------
 # 13. COMPLETED TRADE HISTORY LEDGER
@@ -803,13 +828,9 @@ if closed_trades:
 # -------------------------------------------------------------
 st.markdown("### 📈 Interactive TradingView Live Chart")
 
-chart_candidates = [r["Asset"] for r in records] if records else []
-if not chart_candidates and tickers:
-    chart_candidates = [NAME_MAP.get(t, t.replace(".NS", "").replace("^", "").replace("-USD", "")) for t in tickers[:15]]
-
 c_sel_col1, c_sel_col2 = st.columns([3, 1])
 with c_sel_col1:
-    chart_asset = st.selectbox("Select Asset to View Chart:", chart_candidates if chart_candidates else ["NIFTY 50"])
+    chart_asset = st.selectbox("Select Asset to View Chart:", available_clean_names, index=0)
 
 target_ticker = None
 for r in records:
@@ -818,14 +839,14 @@ for r in records:
         break
 
 if not target_ticker:
-    for t in tickers:
+    for t in ALL_SYSTEM_ASSETS:
         d_name = NAME_MAP.get(t, t.replace(".NS", "").replace("^", "").replace("-USD", ""))
-        if d_name == chart_asset:
+        if d_name == chart_asset or t == chart_asset:
             target_ticker = t
             break
 
 if not target_ticker:
-    target_ticker = "^NSEI"
+    target_ticker = "GOOGL"
 
 tv_interval = "15"
 if ".NS" in target_ticker:
