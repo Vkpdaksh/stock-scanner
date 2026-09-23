@@ -178,7 +178,7 @@ async def scan_and_alert():
     print(f"Running active scan for {pool_type} at {ist_now.strftime('%I:%M %p IST')}...")
 
     try:
-        raw_data = yf.download(current_pool, period="5d", interval="15m", group_by='ticker', progress=False)
+       raw_data = yf.download(current_pool, period="1mo", interval="1h", group_by='ticker', progress=False)
     except Exception as e:
         print(f"Data fetch error: {e}")
         return
