@@ -2,6 +2,7 @@ import os
 import json
 import urllib.request
 import urllib.parse
+import math
 import streamlit as st
 import streamlit.components.v1 as components
 import pandas as pd
@@ -67,7 +68,7 @@ def send_telegram_msg(msg_text):
         return False, f"Error: {str(e)}"
 
 # -------------------------------------------------------------
-# 2. ANGEL ONE SMARTAPI SESSION ENGINE
+# 2. ANGEL ONE SMARTAPI ENGINE
 # -------------------------------------------------------------
 def get_secret(key_name):
     try:
@@ -124,19 +125,8 @@ def place_order_smartapi(symbol_token, trading_symbol, exchange, qty, transactio
         return False, str(e)
 
 # -------------------------------------------------------------
-# 3. WATCHLISTS & ASSETS UNIVERSE (ALL 80 STOCKS + COMMODITIES + FOREX + US)
+# 3. WATCHLISTS & ASSETS UNIVERSE
 # -------------------------------------------------------------
-SECTOR_INDICES = {
-    "NIFTY BANK": "^NSEBANK",
-    "NIFTY IT": "^CNXIT",
-    "NIFTY AUTO": "^CNXAUTO",
-    "NIFTY METAL": "^CNXMETAL",
-    "NIFTY PHARMA": "^CNXPHARMA",
-    "NIFTY ENERGY": "^CNXENERGY",
-    "NIFTY FMCG": "^CNXFMCG",
-    "NIFTY REALTY": "^CNXREALTY"
-}
-
 NSE_EQUITIES = [
     "^NSEI", "^NSEBANK",
     "HDFCBANK.NS", "ICICIBANK.NS", "SBIN.NS", "AXISBANK.NS", "KOTAKBANK.NS", 
@@ -267,16 +257,15 @@ if system_config.get("mode") != selected_mode or system_config.get("execution") 
     system_config["execution"] = execution_type
     save_json(CONFIG_FILE, system_config)
 
-st.caption(f"Status: **{session_text}** | Live Time: **{time_str}** | Fund Rule: **Capital Locked During Active Trades**")
+st.caption(f"Status: **{session_text}** | Live Time: **{time_str}** | Sizing: **Strictly Capped to Available Cash**")
 
 # -------------------------------------------------------------
-# 5. CAPITAL LOCKING CALCULATIONS & RISK DESK
+# 5. CAPITAL SIZING & RISK ALLOCATION DESK
 # -------------------------------------------------------------
 all_trades = paper_data.get("trades", [])
 open_trades = [t for t in all_trades if t.get("status") == "OPEN"]
 closed_trades = [t for t in all_trades if t.get("status") != "OPEN"]
 
-# Total capital currently locked inside active swing trades
 blocked_capital = sum([float(t.get("invested_capital", float(t.get("entry", 0)) * float(t.get("qty", 1)))) for t in open_trades])
 available_balance = max(0.0, float(paper_data.get("balance", 10000.0)))
 total_portfolio_equity = available_balance + blocked_capital
@@ -303,12 +292,12 @@ actual_risk_pct = (risk_per_trade / account_capital) * 100 if account_capital > 
 if actual_risk_pct > 2.0:
     st.error(f"🚨 **High Risk Alert:** Selected risk is **{actual_risk_pct:.1f}%**! Recommended safe risk: 1% - 2% (₹{safe_budget:.0f}).")
 else:
-    st.success(f"✅ **Disciplined Swing Risk:** Risk per trade is **{actual_risk_pct:.1f}%** (₹{risk_per_trade:.0f} per setup).")
+    st.success(f"✅ **Disciplined Swing Risk:** Max risk per trade: ₹{risk_per_trade:.0f} | Available for allocation: **₹{available_balance:,.2f}**")
 
 st.markdown("---")
 
 # -------------------------------------------------------------
-# 6. MARKET UNIVERSE SELECTOR (TIME-ALIGNED ROUTING)
+# 6. MARKET SCANNER ENGINE (CAPITAL-AWARE QUANTITY CALCULATION)
 # -------------------------------------------------------------
 available_universes = list(MARKET_UNIVERSES.keys())
 
@@ -385,7 +374,7 @@ if raw_data is not None:
             if is_breakout:
                 signal = "🟢 SWING BUY BREAKOUT"
                 active_breakouts += 1
-                trade_logic = f"Swing breakout above {res_level:.2f} with EMA20 support."
+                trade_logic = f"Breakout above {res_level:.2f} with EMA20 support."
                 if (rvol >= 1.5 or is_special) and (c_close > ema50) and (rsi >= 55):
                     grade = "Grade A+ (Institutional)"
                 elif (rvol >= 1.2 or is_special) and (rsi >= 50):
@@ -395,7 +384,7 @@ if raw_data is not None:
             elif is_breakdown:
                 signal = "🔴 SWING SELL BREAKDOWN"
                 active_breakouts += 1
-                trade_logic = f"Swing breakdown below {sup_level:.2f} with bearish pressure."
+                trade_logic = f"Breakdown below {sup_level:.2f} with downward pressure."
                 if (rvol >= 1.5 or is_special) and (c_close < ema50) and (rsi <= 45):
                     grade = "Grade A+ (Institutional)"
                 elif (rvol >= 1.2 or is_special) and (rsi <= 50):
@@ -405,8 +394,9 @@ if raw_data is not None:
             else:
                 signal = "⚪ ACCUMULATION / RANGE"
                 grade = "Neutral"
-                trade_logic = "Price oscillating within swing consolidation."
+                trade_logic = "Oscillating within consolidation range."
 
+            # 1.5x ATR Swing Stop Loss
             sl_dist = 1.5 * atr
             if "SELL" in signal:
                 sl = c_close + sl_dist
@@ -417,8 +407,24 @@ if raw_data is not None:
                 target_1 = c_close + (1.5 * sl_dist)
                 target_2 = c_close + (3.0 * sl_dist)
 
+            # ========================================================
+            # CAPITAL-AWARE EXACT POSITION SIZING FORMULA
+            # ========================================================
             risk_per_unit = max(abs(c_close - sl), 0.0001)
-            rec_size = max(1, int(risk_per_trade / risk_per_unit))
+            units_by_risk = int(risk_per_trade / risk_per_unit)
+            
+            # Kitne units khareedne ke liye cash available hai:
+            units_by_capital = int(available_balance / c_close) if c_close > 0 else 0
+
+            # Safe unit dono ka minimum hoga (Zero overtrading):
+            rec_size = min(units_by_risk, units_by_capital)
+
+            if rec_size == 0 and units_by_risk > 0:
+                size_str = "0 Units (Balance Low)"
+            elif rec_size == 0 and c_close > available_balance:
+                size_str = "0 Units (Price > Balance)"
+            else:
+                size_str = f"{rec_size} Units"
 
             display_name = NAME_MAP.get(ticker, ticker.replace(".NS", "").replace("^", "").replace("-USD", ""))
             decimals = 4 if (is_special and ("=" in ticker or "USD" in ticker)) else 2
@@ -436,9 +442,10 @@ if raw_data is not None:
                 "Target 2 (1:3)": round(target_2, decimals),
                 "RVol": rvol_display,
                 "RSI": round(rsi, 1),
-                "Recommended Size": f"{rec_size} Units",
+                "Recommended Size": size_str,
                 "Why This Trade": trade_logic,
-                "Size": rec_size,
+                "Size": max(1, rec_size) if rec_size > 0 else 1,
+                "ActualUnits": rec_size,
                 "Decimals": decimals
             })
         except Exception:
@@ -471,7 +478,7 @@ def get_live_price_for_asset(asset_name):
     return None
 
 # -------------------------------------------------------------
-# 7. SWING MONITOR & CAPITAL RELEASE ENGINE (SL/TP HIT)
+# 7. SWING MONITOR & CAPITAL RELEASE ENGINE
 # -------------------------------------------------------------
 needs_save = False
 
@@ -505,7 +512,7 @@ if needs_save:
     st.rerun()
 
 # -------------------------------------------------------------
-# 8. EOD REPORT DISPATCH
+# 8. EOD REPORT ENGINE
 # -------------------------------------------------------------
 today_trades = [t for t in all_trades if str(t.get("date", "")).startswith(today_date_str)]
 today_closed = [t for t in today_trades if t.get("status") != "OPEN"]
@@ -526,10 +533,10 @@ def build_eod_message():
         f"🛑 Stop-Loss Hits: {sl_hits_today} ❌\n"
         f"📈 Swing Win-Rate: {win_rate:.1f}%\n\n"
         f"💵 Today's Realized P&L: <b>₹{sign}{today_pnl:,.2f}</b>\n"
-        f"💼 Available Cash Balance: <b>₹{available_balance:,.2f}</b>\n"
-        f"🔒 Blocked in Trades: <b>₹{blocked_capital:,.2f}</b>\n"
+        f"💼 Available Cash: <b>₹{available_balance:,.2f}</b>\n"
+        f"🔒 Locked in Trades: <b>₹{blocked_capital:,.2f}</b>\n"
         f"⚡ Total Portfolio Equity: <b>₹{total_portfolio_equity:,.2f}</b>\n\n"
-        f"💡 Capital Preservation: Zero overtrading with locked margin."
+        f"💡 Risk Status: Clean Execution (Zero Overtrading)."
     )
 
 if ist_now.hour >= 18 and (ist_now.hour > 18 or ist_now.minute >= 30):
@@ -653,13 +660,13 @@ with m4:
     st.metric("Active Timeframe", swing_tf)
 
 if records:
-    df_display = pd.DataFrame(records).drop(columns=["Ticker", "Size", "VWAP", "Breakout_Level", "Decimals"])
+    df_display = pd.DataFrame(records).drop(columns=["Ticker", "Size", "ActualUnits", "VWAP", "Breakout_Level", "Decimals"])
     st.dataframe(df_display, use_container_width=True, hide_index=True)
 else:
     st.info(f"Currently scanning {selected_universe} on **{swing_tf}**. No swing breakout setups formed at this bar.")
 
 # -------------------------------------------------------------
-# 11. DUAL ORDER EXECUTION DESK (WITH CAPITAL VALIDATION)
+# 11. DUAL ORDER EXECUTION DESK (WITH ACCURATE CAPITAL SIZING)
 # -------------------------------------------------------------
 st.markdown("### ⚡ Order Execution Desk (Dual Engine: Paper + Real Broker)")
 ord_col1, ord_col2, ord_col3, ord_col4 = st.columns([1.8, 1.2, 1.2, 1.8])
@@ -685,30 +692,16 @@ dec_format = "%.4f" if is_forex_asset else "%.2f"
 dec_step = 0.0001 if is_forex_asset else 0.05
 min_val = 0.0001 if is_forex_asset else 0.01
 
-if selected_item:
-    vwap_val = selected_item.get("VWAP", default_ltp)
-    brk_lvl = selected_item.get("Breakout_Level", default_ltp)
-    sig_type = selected_item.get("Signal", "")
-
-    if "BUY" in sig_type:
-        dist_pct = ((default_ltp - brk_lvl) / brk_lvl) * 100
-        if dist_pct > 1.5:
-            st.warning(f"🟡 **Swing Note:** Price is +{dist_pct:.2f}% above breakout level. Wait for pullback.")
-        else:
-            st.success(f"🟢 **Optimal Swing Entry Zone (+{dist_pct:.2f}%):** Valid swing breakout.")
-    elif "SELL" in sig_type:
-        dist_pct = ((brk_lvl - default_ltp) / brk_lvl) * 100
-        if dist_pct > 1.5:
-            st.warning(f"🟡 **Swing Note:** Price is -{dist_pct:.2f}% below breakdown level.")
-        else:
-            st.success(f"🟢 **Optimal Swing Entry Zone (-{dist_pct:.2f}%):** Short swing valid.")
+# Calculate auto-safe qty for order desk based on available cash
+auto_units_by_capital = int(available_balance / default_ltp) if default_ltp > 0 else 0
+auto_suggested_qty = selected_item["Size"] if selected_item else min(1, auto_units_by_capital)
+default_order_qty = max(1, min(auto_suggested_qty, auto_units_by_capital)) if auto_units_by_capital > 0 else 1
 
 with ord_col2:
     side = st.selectbox("Direction:", ["BUY", "SELL"])
 
 with ord_col3:
-    suggested_qty = selected_item["Size"] if selected_item else 1
-    qty_input = st.number_input("Qty / Lots:", min_value=1, value=max(1, suggested_qty), step=1)
+    qty_input = st.number_input("Qty / Lots:", min_value=1, value=default_order_qty, step=1)
 
 with ord_col4:
     custom_exec_price = st.number_input("Execution Price:", min_value=min_val, value=float(default_ltp), step=dec_step, format=dec_format)
@@ -720,7 +713,11 @@ with sl_tp_col2:
     custom_tp = st.number_input("Target Price (TP):", min_value=min_val, value=float(default_tp), step=dec_step, format=dec_format)
 
 required_fund = float(custom_exec_price * qty_input)
-st.caption(f"Required Capital to Open: **₹{required_fund:,.2f}** | Available Cash: **₹{available_balance:,.2f}**")
+
+if required_fund > available_balance:
+    st.warning(f"⚠️ **Required Fund:** ₹{required_fund:,.2f} | **Available Balance:** ₹{available_balance:,.2f} (Over-allocation warning)")
+else:
+    st.success(f"✅ **Required Fund:** ₹{required_fund:,.2f} | **Available Balance:** ₹{available_balance:,.2f} (Within safe capital limit)")
 
 st.write("")
 btn_col1, btn_col2 = st.columns(2)
@@ -728,7 +725,7 @@ btn_col1, btn_col2 = st.columns(2)
 with btn_col1:
     if st.button("📥 Record Virtual Swing Trade", use_container_width=True):
         if required_fund > available_balance:
-            st.error(f"❌ **Insufficient Funds to Prevent Overtrading!** You need ₹{required_fund:,.2f}, but available cash is only ₹{available_balance:,.2f}. Close active trades to free up capital.")
+            st.error(f"❌ **Trade Rejected to Stop Overtrading!** You need ₹{required_fund:,.2f}, but available cash is only ₹{available_balance:,.2f}. Reduce quantity or close open trades.")
         else:
             new_trade = {
                 "date": ist_now.strftime("%Y-%m-%d %H:%M"),
@@ -747,7 +744,7 @@ with btn_col1:
             paper_data["balance"] -= required_fund
             paper_data["trades"].append(new_trade)
             save_json(PAPER_TRADES_FILE, paper_data)
-            st.success(f"✅ ₹{required_fund:,.2f} Locked in {chosen_asset}! Trade running with zero overtrading risk.")
+            st.success(f"✅ ₹{required_fund:,.2f} Locked in {chosen_asset}! Trade running with safe capital discipline.")
             st.rerun()
 
 with btn_col2:
