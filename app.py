@@ -43,7 +43,7 @@ def save_json(filepath, data):
         pass
 
 system_config = load_json(CONFIG_FILE, {"mode": "Pro Trader (Full)", "execution": "Virtual Paper Trading"})
-paper_data = load_json(PAPER_TRADES_FILE, {"balance": 10000, "trades": []})
+paper_data = load_json(PAPER_TRADES_FILE, {"balance": 10000.0, "trades": []})
 eod_tracker = load_json(EOD_FLAG_FILE, {"last_sent_date": ""})
 
 def get_ist_now():
@@ -67,7 +67,7 @@ def send_telegram_msg(msg_text):
         return False, f"Error: {str(e)}"
 
 # -------------------------------------------------------------
-# 2. ANGEL ONE SMARTAPI SESSION ENGINE (SWING/CARRYFORWARD)
+# 2. ANGEL ONE SMARTAPI SESSION ENGINE
 # -------------------------------------------------------------
 def get_secret(key_name):
     try:
@@ -103,7 +103,6 @@ def place_order_smartapi(symbol_token, trading_symbol, exchange, qty, transactio
     if not api:
         return False, "SmartAPI credentials missing! Add Angel One secrets or use Paper Desk."
     try:
-        # Swing Trading: Product type set to DELIVERY / CARRYFORWARD
         prod_type = "DELIVERY" if exchange == "NSE" else "CARRYFORWARD"
         order_params = {
             "variety": "NORMAL",
@@ -257,7 +256,6 @@ with col_exec:
         execution_type = "Dual" if "Dual" in selected_execution else ("SmartAPI" if "SmartAPI" in selected_execution else "Paper Trading")
 
 with col_tf:
-    # Dedicated Swing Timeframe: 1 Hour, 4 Hours, 1 Day
     swing_tf = st.selectbox(
         "⏱️ Swing Timeframe:",
         ["1h (1 Hour)", "4h (4 Hours)", "1d (Daily)"],
@@ -269,18 +267,25 @@ if system_config.get("mode") != selected_mode or system_config.get("execution") 
     system_config["execution"] = execution_type
     save_json(CONFIG_FILE, system_config)
 
-st.caption(f"Status: **{session_text}** | Live Time: **{time_str}** | Swing Style: **No Intraday Square-off**")
+st.caption(f"Status: **{session_text}** | Live Time: **{time_str}** | Fund Rule: **Capital Locked During Active Trades**")
 
 # -------------------------------------------------------------
-# 5. RISK MANAGEMENT & CAPITAL ALLOCATION DESK
+# 5. CAPITAL LOCKING CALCULATIONS & RISK DESK
 # -------------------------------------------------------------
+all_trades = paper_data.get("trades", [])
+open_trades = [t for t in all_trades if t.get("status") == "OPEN"]
+closed_trades = [t for t in all_trades if t.get("status") != "OPEN"]
+
+# Total capital currently locked inside active swing trades
+blocked_capital = sum([float(t.get("invested_capital", float(t.get("entry", 0)) * float(t.get("qty", 1)))) for t in open_trades])
+available_balance = max(0.0, float(paper_data.get("balance", 10000.0)))
+total_portfolio_equity = available_balance + blocked_capital
+
 st.markdown("### 🛡️ Risk Management & Capital Allocation Desk")
 r_col1, r_col2, r_col3, r_col4 = st.columns(4)
 
-current_balance = paper_data.get("balance", 10000)
-
 with r_col1:
-    account_capital = st.number_input("Account Capital (₹):", min_value=1000, value=int(current_balance), step=1000)
+    account_capital = st.number_input("Base Portfolio Capital (₹):", min_value=1000, value=int(total_portfolio_equity), step=1000)
 
 with r_col2:
     risk_pct_choice = st.selectbox("Max Risk Per Trade (%):", [1.0, 1.5, 2.0, 3.0], index=0)
@@ -296,9 +301,9 @@ with r_col4:
 actual_risk_pct = (risk_per_trade / account_capital) * 100 if account_capital > 0 else 0
 
 if actual_risk_pct > 2.0:
-    st.error(f"🚨 **High Risk Alert:** Selected swing risk is **{actual_risk_pct:.1f}%**! Recommended safe risk: 1% - 2% (₹{safe_budget:.0f}).")
+    st.error(f"🚨 **High Risk Alert:** Selected risk is **{actual_risk_pct:.1f}%**! Recommended safe risk: 1% - 2% (₹{safe_budget:.0f}).")
 else:
-    st.success(f"✅ **Disciplined Swing Risk:** Risk per trade is **{actual_risk_pct:.1f}%** (₹{risk_per_trade:.0f} per swing setup).")
+    st.success(f"✅ **Disciplined Swing Risk:** Risk per trade is **{actual_risk_pct:.1f}%** (₹{risk_per_trade:.0f} per setup).")
 
 st.markdown("---")
 
@@ -317,10 +322,9 @@ else:
 selected_universe = st.selectbox("Active Asset Universe (Auto-Switches by Time):", available_universes, index=default_univ_index)
 tickers = MARKET_UNIVERSES[selected_universe]
 
-# Map swing timeframe string to yfinance interval and period
 tf_map = {
     "1h (1 Hour)": {"interval": "1h", "period": "1mo", "tv": "60"},
-    "4h (4 Hours)": {"interval": "1h", "period": "3mo", "tv": "240"}, # yfinance 4h is resampled or 1h extended
+    "4h (4 Hours)": {"interval": "1h", "period": "3mo", "tv": "240"},
     "1d (Daily)": {"interval": "1d", "period": "6mo", "tv": "D"}
 }
 curr_tf_conf = tf_map[swing_tf]
@@ -342,7 +346,6 @@ if raw_data is not None:
             df = raw_data[ticker] if len(tickers) > 1 else raw_data
             df = df.dropna()
             
-            # Resample for 4h if 4h is selected
             if "4h" in swing_tf and len(df) >= 8:
                 df = df.resample('4h').agg({
                     'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'
@@ -376,14 +379,13 @@ if raw_data is not None:
             rvol = (c_vol / avg_vol) if avg_vol > 0 else 1.0
             rvol_display = "Liquid" if is_special else f"{round(rvol, 2)}x"
 
-            # Swing Breakout / Breakdown Logic
             is_breakout = (c_close > res_level) and (c_close > c_open) and (c_close > ema20)
             is_breakdown = (c_close < sup_level) and (c_close < c_open) and (c_close < ema20)
 
             if is_breakout:
                 signal = "🟢 SWING BUY BREAKOUT"
                 active_breakouts += 1
-                trade_logic = f"Swing breakout above {res_level:.2f} with EMA20 confirmation."
+                trade_logic = f"Swing breakout above {res_level:.2f} with EMA20 support."
                 if (rvol >= 1.5 or is_special) and (c_close > ema50) and (rsi >= 55):
                     grade = "Grade A+ (Institutional)"
                 elif (rvol >= 1.2 or is_special) and (rsi >= 50):
@@ -393,7 +395,7 @@ if raw_data is not None:
             elif is_breakdown:
                 signal = "🔴 SWING SELL BREAKDOWN"
                 active_breakouts += 1
-                trade_logic = f"Swing breakdown below {sup_level:.2f} with downward pressure."
+                trade_logic = f"Swing breakdown below {sup_level:.2f} with bearish pressure."
                 if (rvol >= 1.5 or is_special) and (c_close < ema50) and (rsi <= 45):
                     grade = "Grade A+ (Institutional)"
                 elif (rvol >= 1.2 or is_special) and (rsi <= 50):
@@ -403,9 +405,8 @@ if raw_data is not None:
             else:
                 signal = "⚪ ACCUMULATION / RANGE"
                 grade = "Neutral"
-                trade_logic = "Price consolidating within swing range."
+                trade_logic = "Price oscillating within swing consolidation."
 
-            # Wider Swing Stop Loss (1.5x ATR for swing stability)
             sl_dist = 1.5 * atr
             if "SELL" in signal:
                 sl = c_close + sl_dist
@@ -470,13 +471,10 @@ def get_live_price_for_asset(asset_name):
     return None
 
 # -------------------------------------------------------------
-# 7. SWING POSITION MONITOR (NO INTRADAY 3:15 AUTO-SQUARE-OFF)
+# 7. SWING MONITOR & CAPITAL RELEASE ENGINE (SL/TP HIT)
 # -------------------------------------------------------------
-all_trades = paper_data.get("trades", [])
 needs_save = False
 
-# Swing positions DO NOT auto square-off at 3:15 PM!
-# Positions exit ONLY when SL or Target 1 is hit or user exits manually.
 for trade in all_trades:
     if trade.get("status") == "OPEN":
         a_name = trade.get("asset")
@@ -486,21 +484,20 @@ for trade in all_trades:
         t_price = trade.get("tp1")
         q = trade.get("qty")
         side_type = trade.get("type")
+        inv_fund = float(trade.get("invested_capital", e_price * q))
 
         sl_hit = (side_type == "BUY" and c_ltp <= s_price) or (side_type == "SELL" and c_ltp >= s_price)
         tp_hit = (side_type == "BUY" and c_ltp >= t_price) or (side_type == "SELL" and c_ltp <= t_price)
 
         if sl_hit or tp_hit:
-            if sl_hit:
-                trade["status"] = "SL_HIT"
-            elif tp_hit:
-                trade["status"] = "TARGET_HIT"
-
+            trade["status"] = "SL_HIT" if sl_hit else "TARGET_HIT"
             trade["exit_price"] = c_ltp
             trade["exit_time"] = ist_now.strftime("%Y-%m-%d %H:%M")
             pnl_realized = (c_ltp - e_price) * q if side_type == "BUY" else (e_price - c_ltp) * q
             trade["pnl"] = pnl_realized
-            paper_data["balance"] += pnl_realized
+            
+            # Release blocked fund + profit/loss back to balance
+            paper_data["balance"] += (inv_fund + pnl_realized)
             needs_save = True
 
 if needs_save:
@@ -508,7 +505,7 @@ if needs_save:
     st.rerun()
 
 # -------------------------------------------------------------
-# 8. AUTOMATIC & MANUAL EOD PERFORMANCE DISPATCH ENGINE
+# 8. EOD REPORT DISPATCH
 # -------------------------------------------------------------
 today_trades = [t for t in all_trades if str(t.get("date", "")).startswith(today_date_str)]
 today_closed = [t for t in today_trades if t.get("status") != "OPEN"]
@@ -529,12 +526,12 @@ def build_eod_message():
         f"🛑 Stop-Loss Hits: {sl_hits_today} ❌\n"
         f"📈 Swing Win-Rate: {win_rate:.1f}%\n\n"
         f"💵 Today's Realized P&L: <b>₹{sign}{today_pnl:,.2f}</b>\n"
-        f"💼 Available Swing Portfolio: <b>₹{current_balance:,.2f}</b>\n"
-        f"⚡ Active Open Swing Positions: <b>{len([t for t in all_trades if t.get('status') == 'OPEN'])}</b>\n\n"
-        f"💡 Swing Discipline: Carryforward setups with defined risk only."
+        f"💼 Available Cash Balance: <b>₹{available_balance:,.2f}</b>\n"
+        f"🔒 Blocked in Trades: <b>₹{blocked_capital:,.2f}</b>\n"
+        f"⚡ Total Portfolio Equity: <b>₹{total_portfolio_equity:,.2f}</b>\n\n"
+        f"💡 Capital Preservation: Zero overtrading with locked margin."
     )
 
-# Auto-dispatch EOD if it is past 6:30 PM IST and not sent yet today
 if ist_now.hour >= 18 and (ist_now.hour > 18 or ist_now.minute >= 30):
     if eod_tracker.get("last_sent_date") != today_date_str:
         sent, _ = send_telegram_msg(build_eod_message())
@@ -543,26 +540,22 @@ if ist_now.hour >= 18 and (ist_now.hour > 18 or ist_now.minute >= 30):
             save_json(EOD_FLAG_FILE, eod_tracker)
 
 # -------------------------------------------------------------
-# 9. VIRTUAL SWING PORTFOLIO & ACTIVE POSITIONS
+# 9. VIRTUAL SWING PORTFOLIO WITH MARGIN LOCK DESK
 # -------------------------------------------------------------
-st.markdown("### 💼 Virtual Swing Portfolio (₹10,000 Capital Desk)")
-current_balance = paper_data.get("balance", 10000)
-total_pnl = current_balance - 10000
-
-open_trades = [t for t in all_trades if t.get("status") == "OPEN"]
-closed_trades = [t for t in all_trades if t.get("status") != "OPEN"]
+st.markdown("### 💼 Virtual Swing Portfolio (Margin Locking Desk)")
+total_lifetime_pnl = total_portfolio_equity - 10000.0
 
 p1, p2, p3, p4 = st.columns([1.5, 1.5, 1.5, 1.2])
 with p1:
-    st.metric("Virtual Cash Balance", f"₹{current_balance:,.2f}")
+    st.metric("Available Virtual Cash", f"₹{available_balance:,.2f}")
 with p2:
-    st.metric("Total Paper P&L", f"₹{total_pnl:+,.2f}", delta=f"₹{total_pnl:+,.2f}")
+    st.metric("Locked in Open Trades", f"₹{blocked_capital:,.2f}")
 with p3:
-    st.metric("Open / Closed Trades", f"{len(open_trades)} Open | {len(closed_trades)} Closed")
+    st.metric("Total Equity & P&L", f"₹{total_portfolio_equity:,.2f}", delta=f"₹{total_lifetime_pnl:+,.2f}")
 with p4:
     st.write("")
-    if st.button("🔄 Reset Portfolio"):
-        paper_data = {"balance": 10000, "trades": []}
+    if st.button("🔄 Reset to ₹10k"):
+        paper_data = {"balance": 10000.0, "trades": []}
         save_json(PAPER_TRADES_FILE, paper_data)
         st.success("Portfolio reset to ₹10,000!")
         st.rerun()
@@ -589,7 +582,7 @@ with st.expander("📊 Today's EOD Report & Telegram Dispatch", expanded=False):
 
 # Active Running Swing Positions
 if open_trades:
-    st.markdown("#### ⚡ Active Open Swing Positions (Carried Forward)")
+    st.markdown("#### ⚡ Active Open Swing Positions (Capital Blocked)")
     for idx, trade in enumerate(open_trades):
         asset_name = trade.get('asset')
         current_ltp = get_live_price_for_asset(asset_name) or trade.get('entry')
@@ -599,6 +592,7 @@ if open_trades:
         t_type = trade.get('type')
         sl_price = trade.get('sl')
         tp1_price = trade.get('tp1')
+        inv_amount = float(trade.get("invested_capital", entry_price * qty))
 
         is_fx = any(fx in str(asset_name).upper() for fx in ["USD", "EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "NZD", "BTC", "ETH", "SOL", "XAU", "XAG", "GOLD", "SILVER"])
         fmt = "{:+,.4f}" if is_fx else "{:+,.2f}"
@@ -614,7 +608,7 @@ if open_trades:
                     <div>
                         <strong style="font-size: 16px;">{asset_name}</strong> 
                         <span style="background: {'#1b5e20' if t_type=='BUY' else '#b71c1c'}; color: white; padding: 2px 6px; border-radius: 4px; font-size: 11px; margin-left: 6px;">{t_type} (SWING)</span>
-                        <span style="color: #90a4ae; font-size: 11px; margin-left: 10px;">Entered: {trade.get('date')}</span>
+                        <span style="color: #ffb74d; font-size: 12px; margin-left: 10px;">🔒 Locked: ₹{inv_amount:,.2f}</span>
                     </div>
                     <div style="font-size: 15px; font-weight: bold; color: {pnl_color}; background: {pnl_bg}; padding: 2px 8px; border-radius: 4px;">
                         P&L: {fmt.format(live_pnl)}
@@ -638,9 +632,11 @@ if open_trades:
                 trade["exit_time"] = ist_now.strftime("%Y-%m-%d %H:%M")
                 pnl_realized = (current_ltp - entry_price) * qty if t_type == "BUY" else (entry_price - current_ltp) * qty
                 trade["pnl"] = pnl_realized
-                paper_data["balance"] += pnl_realized
+                
+                # Release margin + P&L back to cash
+                paper_data["balance"] += (inv_amount + pnl_realized)
                 save_json(PAPER_TRADES_FILE, paper_data)
-                st.success(f"Closed {asset_name} position!")
+                st.success(f"Released ₹{inv_amount:,.2f} + P&L back to Available Balance!")
                 st.rerun()
 
 # -------------------------------------------------------------
@@ -652,7 +648,7 @@ with m1:
 with m2:
     st.metric("Active Breakouts", active_breakouts)
 with m3:
-    st.metric("Risk Budget", f"₹{risk_per_trade:.0f}")
+    st.metric("Available Balance", f"₹{available_balance:,.2f}")
 with m4:
     st.metric("Active Timeframe", swing_tf)
 
@@ -663,7 +659,7 @@ else:
     st.info(f"Currently scanning {selected_universe} on **{swing_tf}**. No swing breakout setups formed at this bar.")
 
 # -------------------------------------------------------------
-# 11. DUAL ORDER EXECUTION DESK (PAPER & REAL BROKER)
+# 11. DUAL ORDER EXECUTION DESK (WITH CAPITAL VALIDATION)
 # -------------------------------------------------------------
 st.markdown("### ⚡ Order Execution Desk (Dual Engine: Paper + Real Broker)")
 ord_col1, ord_col2, ord_col3, ord_col4 = st.columns([1.8, 1.2, 1.2, 1.8])
@@ -697,15 +693,15 @@ if selected_item:
     if "BUY" in sig_type:
         dist_pct = ((default_ltp - brk_lvl) / brk_lvl) * 100
         if dist_pct > 1.5:
-            st.warning(f"🟡 **Swing Note:** Price is +{dist_pct:.2f}% above breakout level. Consider entering on pullback.")
+            st.warning(f"🟡 **Swing Note:** Price is +{dist_pct:.2f}% above breakout level. Wait for pullback.")
         else:
-            st.success(f"🟢 **Optimal Swing Entry Zone (+{dist_pct:.2f}%):** Valid setup with multi-day swing holding.")
+            st.success(f"🟢 **Optimal Swing Entry Zone (+{dist_pct:.2f}%):** Valid swing breakout.")
     elif "SELL" in sig_type:
         dist_pct = ((brk_lvl - default_ltp) / brk_lvl) * 100
         if dist_pct > 1.5:
-            st.warning(f"🟡 **Swing Note:** Price is -{dist_pct:.2f}% below breakdown level. Wait for swing retest.")
+            st.warning(f"🟡 **Swing Note:** Price is -{dist_pct:.2f}% below breakdown level.")
         else:
-            st.success(f"🟢 **Optimal Swing Entry Zone (-{dist_pct:.2f}%):** Short setup valid.")
+            st.success(f"🟢 **Optimal Swing Entry Zone (-{dist_pct:.2f}%):** Short swing valid.")
 
 with ord_col2:
     side = st.selectbox("Direction:", ["BUY", "SELL"])
@@ -723,27 +719,36 @@ with sl_tp_col1:
 with sl_tp_col2:
     custom_tp = st.number_input("Target Price (TP):", min_value=min_val, value=float(default_tp), step=dec_step, format=dec_format)
 
+required_fund = float(custom_exec_price * qty_input)
+st.caption(f"Required Capital to Open: **₹{required_fund:,.2f}** | Available Cash: **₹{available_balance:,.2f}**")
+
 st.write("")
 btn_col1, btn_col2 = st.columns(2)
 
 with btn_col1:
     if st.button("📥 Record Virtual Swing Trade", use_container_width=True):
-        new_trade = {
-            "date": ist_now.strftime("%Y-%m-%d %H:%M"),
-            "asset": chosen_asset,
-            "type": side,
-            "entry": custom_exec_price,
-            "sl": custom_sl,
-            "tp1": custom_tp,
-            "tp2": selected_item.get("Target 2 (1:3)", custom_tp) if selected_item else custom_tp,
-            "qty": qty_input,
-            "status": "OPEN",
-            "timeframe": swing_tf
-        }
-        paper_data["trades"].append(new_trade)
-        save_json(PAPER_TRADES_FILE, paper_data)
-        st.success(f"✅ Swing Position Recorded for {chosen_asset} at {custom_exec_price}! (No intraday square-off)")
-        st.rerun()
+        if required_fund > available_balance:
+            st.error(f"❌ **Insufficient Funds to Prevent Overtrading!** You need ₹{required_fund:,.2f}, but available cash is only ₹{available_balance:,.2f}. Close active trades to free up capital.")
+        else:
+            new_trade = {
+                "date": ist_now.strftime("%Y-%m-%d %H:%M"),
+                "asset": chosen_asset,
+                "type": side,
+                "entry": custom_exec_price,
+                "sl": custom_sl,
+                "tp1": custom_tp,
+                "tp2": selected_item.get("Target 2 (1:3)", custom_tp) if selected_item else custom_tp,
+                "qty": qty_input,
+                "invested_capital": required_fund,
+                "status": "OPEN",
+                "timeframe": swing_tf
+            }
+            # Deduct invested capital from available virtual balance
+            paper_data["balance"] -= required_fund
+            paper_data["trades"].append(new_trade)
+            save_json(PAPER_TRADES_FILE, paper_data)
+            st.success(f"✅ ₹{required_fund:,.2f} Locked in {chosen_asset}! Trade running with zero overtrading risk.")
+            st.rerun()
 
 with btn_col2:
     if st.button("🚀 Fire Real Order (Angel One Delivery)", use_container_width=True):
@@ -820,7 +825,7 @@ tv_symbol_map = {
     "NZD/USD": "FX:NZDUSD",
     "EUR/GBP": "FX:EURGBP",
     "EUR/JPY": "FX:EURJPY",
-    "GBP/JPY": "FX:GBPJPY",
+    "GBPJPY=X": "FX:GBPJPY",
     "BITCOIN": "BINANCE:BTCUSDT",
     "ETHEREUM": "BINANCE:ETHUSDT",
     "SOLANA": "BINANCE:SOLUSDT"
