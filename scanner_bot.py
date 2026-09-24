@@ -334,6 +334,9 @@ def save_eod_flag(data):
     except Exception:
         pass
 
+# IST Time define karein taaki NameError na aaye
+ist_now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
+
 # Check if current time is past 06:30 PM IST (18:30)
 if ist_now.hour > 18 or (ist_now.hour == 18 and ist_now.minute >= 30):
     eod_data = load_eod_flag()
