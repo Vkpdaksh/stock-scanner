@@ -1,3 +1,5 @@
+import urllib.request
+import urllib.parse
 import os
 import json
 import asyncio
