@@ -315,3 +315,80 @@ async def scan_and_alert():
 
 if __name__ == "__main__":
     asyncio.run(scan_and_alert())
+# ==========================================
+# AUTOMATIC EOD REPORT ENGINE (AT 06:30 PM+ IST)
+# ==========================================
+EOD_FLAG_FILE = "eod_sent_flag.json"
+
+def load_eod_flag():
+    if os.path.exists(EOD_FLAG_FILE):
+        try:
+            with open(EOD_FLAG_FILE, "r") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {"last_sent_date": ""}
+
+def save_eod_flag(data):
+    try:
+        with open(EOD_FLAG_FILE, "w") as f:
+            json.dump(data, f)
+    except Exception:
+        pass
+
+# IST Time define kiya gaya hai taaki 'ist_now' error na aaye
+ist_now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
+
+# Shaam 06:30 PM IST ke baad EOD automatic send hoga
+if ist_now.hour > 18 or (ist_now.hour == 18 and ist_now.minute >= 30):
+    eod_data = load_eod_flag()
+    today_str = ist_now.strftime("%Y-%m-%d")
+    
+    if eod_data.get("last_sent_date") != today_str:
+        paper_file = "paper_trades.json"
+        p_data = {"trades": []}
+        if os.path.exists(paper_file):
+            try:
+                with open(paper_file, "r") as f:
+                    p_data = json.load(f)
+            except Exception:
+                pass
+        
+        all_tr = p_data.get("trades", [])
+        today_tr = [t for t in all_tr if str(t.get("date", "")).startswith(today_str)]
+        today_cls = [t for t in today_tr if t.get("status") != "OPEN"]
+        
+        tp_hits = len([t for t in today_cls if t.get("status") == "TARGET_HIT"])
+        sl_hits = len([t for t in today_cls if t.get("status") == "SL_HIT"])
+        tot_today = len(today_tr)
+        t_pnl = sum([float(t.get("pnl", 0.0)) for t in today_cls])
+        w_rate = (tp_hits / len(today_cls) * 100) if today_cls else 0.0
+        
+        sign = "+" if t_pnl >= 0 else ""
+        eod_msg = (
+            f"📊 <b>DAILY EOD SWING TRADING REPORT</b>\n"
+            f"📅 Date: {today_str} | 🕒 Time: {ist_now.strftime('%I:%M %p IST')}\n\n"
+            f"🔢 Total Swing Setups: {tot_today}\n"
+            f"🎯 Targets Hit: {tp_hits} ✅\n"
+            f"🛑 Stop-Loss Hits: {sl_hits} ❌\n"
+            f"📈 Win-Rate: {w_rate:.1f}%\n\n"
+            f"💵 Today's P&L: <b>₹{sign}{t_pnl:,.2f}</b>\n"
+            f"⚡ Running Swing Trades: <b>{len([t for t in all_tr if t.get('status') == 'OPEN'])}</b>\n\n"
+            f"💡 Status: Automatic EOD Dispatch Confirmed."
+        )
+        
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+        payload = urllib.parse.urlencode({
+            "chat_id": TELEGRAM_CHAT_ID,
+            "text": eod_msg,
+            "parse_mode": "HTML"
+        }).encode("utf-8")
+        
+        try:
+            req = urllib.request.Request(url, data=payload)
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                if resp.status == 200:
+                    eod_data["last_sent_date"] = today_str
+                    save_eod_flag(eod_data)
+        except Exception:
+            pass
