@@ -441,17 +441,21 @@ with desk_left:
     with chart_col2:
         tv_tf = st.selectbox("Interval:", ["1m", "5m", "15m", "60m", "D"], index=3)
 
-    raw_t = REVERSE_MAP.get(active_chart_asset, active_chart_asset)
-    if "^NSE" in raw_t or ".NS" in raw_t:
-        tv_symbol = "NSE:" + raw_t.replace(".NS", "").replace("^", "")
-    elif "=F" in raw_t:
-        tv_symbol = "TVC:" + raw_t.replace("=F", "")
-    elif "-USD" in raw_t:
-        tv_symbol = "BINANCE:" + raw_t.replace("-USD", "USDT")
-    elif any(fx in raw_t for fx in ["=X"]):
-        tv_symbol = "FX:" + raw_t.replace("=X", "")
+    # 1. TradingView सिंबल को बिल्कुल सही फ़ॉर्मेट करें
+    raw_ticker = REVERSE_MAP.get(active_chart_asset, active_chart_asset)
+    
+    # अगर यह भारतीय शेयर/इंडेक्स है
+    if raw_ticker in NSE_EQUITIES or f"{raw_ticker}.NS" in NSE_EQUITIES or ".NS" in raw_ticker or "^" in raw_ticker:
+        clean_code = raw_ticker.replace(".NS", "").replace("^NSEI", "NIFTY").replace("^NSEBANK", "BANKNIFTY")
+        tv_symbol = f"NSE:{clean_code}"
+    elif "=F" in raw_ticker:
+        tv_symbol = f"TVC:{raw_ticker.replace('=F', '')}"
+    elif "-USD" in raw_ticker:
+        tv_symbol = f"BINANCE:{raw_ticker.replace('-USD', 'USDT')}"
+    elif "=X" in raw_ticker:
+        tv_symbol = f"FX_IDC:{raw_ticker.replace('=X', '')}"
     else:
-        tv_symbol = "NASDAQ:" + raw_t
+        tv_symbol = f"NASDAQ:{raw_ticker}"
 
     tv_html = f"""
     <div class="tradingview-widget-container" style="height:530px; width:100%;">
@@ -480,16 +484,33 @@ with desk_left:
 with desk_right:
     st.markdown("#### ⚡ 1-Click Fast Execution")
     
-    # 1. Fetch live market candle with ATR
-    c_live, _, _, atr_live = get_live_candle_data(active_chart_asset)
-    asset_ltp = c_live if c_live is not None else 100.0
-    atr_val = atr_live if atr_live is not None else (asset_ltp * 0.015)
+    # 2. लाइव भाव (LTP) को सही सिंबल से निकालें
+    search_sym = raw_ticker
+    if raw_ticker in NSE_EQUITIES and not raw_ticker.endswith(".NS") and not raw_ticker.startswith("^"):
+        search_sym = f"{raw_ticker}.NS"
+    elif f"{raw_ticker}.NS" in NSE_EQUITIES:
+        search_sym = f"{raw_ticker}.NS"
+
+    c_live, _, _, atr_live = get_live_candle_data(search_sym)
+    
+    # बैकअप: अगर get_live_candle_data खाली रह जाए
+    if c_live is None or c_live == 0:
+        try:
+            temp_df = yf.download(search_sym, period="2d", interval="15m", progress=False)
+            if not temp_df.empty:
+                c_live = float(temp_df['Close'].dropna().iloc[-1])
+                atr_live = c_live * 0.015
+        except Exception:
+            pass
+
+    asset_ltp = float(c_live) if (c_live is not None and c_live > 0) else 100.0
+    atr_val = float(atr_live) if (atr_live is not None and atr_live > 0) else (asset_ltp * 0.015)
 
     is_fx = any(fx in active_chart_asset for fx in ["USD", "EUR", "GBP", "JPY", "INR", "Gold", "Silver", "BITCOIN", "ETHEREUM"])
     dec_fmt = "%.4f" if is_fx else "%.2f"
     step_val = 0.0001 if is_fx else 0.05
 
-    # 2. Strict 1:2 R:R Auto Calculation
+    # 3. 1:2 ऑटो फ़ॉर्मूला
     sl_dist = 1.0 * atr_val
     auto_sl_buy = round(asset_ltp - sl_dist, 4 if is_fx else 2)
     auto_tp_buy = round(asset_ltp + (2.0 * sl_dist), 4 if is_fx else 2)
@@ -500,7 +521,6 @@ with desk_right:
     fast_qty = st.number_input("Lots / Qty:", min_value=1, value=1, step=1)
     req_fund = asset_ltp * fast_qty
 
-    # 3. Live Auto SL & Auto 1:2 Target Display Boxes
     col_sl_b, col_tp_b = st.columns(2)
     with col_sl_b:
         exec_sl = st.number_input("Auto SL (1x ATR):", value=float(auto_sl_buy), step=step_val, format=dec_fmt)
@@ -579,9 +599,6 @@ with desk_right:
                     st.rerun()
     else:
         st.caption("No running positions right now.")
-
-st.markdown("---")
-
 # -------------------------------------------------------------
 # 10. SAHI RADAR TABS (OPTION CHAIN + SHOCKERS + 52W HIGH)
 # -------------------------------------------------------------
