@@ -7,6 +7,8 @@ import pandas as pd
 import numpy as np
 import yfinance as yf
 import ta
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 from datetime import datetime, timezone, timedelta
 from streamlit_gsheets import GSheetsConnection
 
@@ -35,7 +37,7 @@ ANGEL_MPIN = get_secret("ANGEL_MPIN")
 ANGEL_TOTP_KEY = get_secret("ANGEL_TOTP_KEY")
 
 # -------------------------------------------------------------
-# 2. GOOGLE SHEETS CLOUD STORAGE
+# 2. GOOGLE SHEETS CLOUD STORAGE (PERSISTENT DATA)
 # -------------------------------------------------------------
 @st.cache_resource
 def get_sheets_connection():
@@ -65,7 +67,7 @@ def save_sheet_trades(df):
         conn.update(data=df)
         return True
     except Exception as e:
-        st.error(f"Error saving to Google Sheets: {str(e)}")
+        st.error(f"Google Sheets Error: {str(e)}")
         return False
 
 # -------------------------------------------------------------
@@ -80,7 +82,7 @@ time_str = ist_now.strftime("%I:%M:%S %p IST")
 cur_mins = ist_now.hour * 60 + ist_now.minute
 
 # -------------------------------------------------------------
-# 4. ROBUST TICKER MAPPINGS
+# 4. ROBUST TICKER MAPPINGS (ALL MARKETS)
 # -------------------------------------------------------------
 FOREX_MAP = {
     "AUD/USD": "AUDUSD=X", "EUR/USD": "EURUSD=X", "GBP/USD": "GBPUSD=X",
@@ -219,7 +221,7 @@ if sheet_modified:
     st.rerun()
 
 # -------------------------------------------------------------
-# 7. SINGLE-SCREEN TRADING DESK (NATIVE ZERO-CRASH ENGINE)
+# 7. SINGLE-SCREEN TRADING DESK (PRO CANDLESTICK ENGINE)
 # -------------------------------------------------------------
 st.markdown("### 🖥️ Single-Screen Trading Desk")
 desk_left, desk_right = st.columns([2.3, 1.2])
@@ -231,10 +233,59 @@ with desk_left:
     df_chart = fetch_chart_dataframe(active_ticker, chart_interval)
     
     if not df_chart.empty:
-        st.markdown(f"**📈 {active_chart_asset} ({active_ticker}) - Live {chart_interval} Price Movement**")
-        st.line_chart(df_chart[['Close']], height=480, use_container_width=True)
+        # EMA 20 Calculation
+        df_chart['EMA20'] = df_chart['Close'].ewm(span=20, adjust=False).mean()
+
+        # Candlestick + Volume Subplot Figure
+        fig = make_subplots(
+            rows=2, cols=1, 
+            shared_xaxes=True, 
+            vertical_spacing=0.03, 
+            subplot_titles=(f"{active_chart_asset} ({active_ticker}) - Live {chart_interval} Candlestick Chart", "Volume"),
+            row_width=[0.2, 0.8]
+        )
+
+        # 1. Candlestick Bars
+        fig.add_trace(go.Candlestick(
+            x=df_chart.index,
+            open=df_chart['Open'],
+            high=df_chart['High'],
+            low=df_chart['Low'],
+            close=df_chart['Close'],
+            name="Price",
+            increasing_line_color='#26a69a',
+            decreasing_line_color='#ef5350'
+        ), row=1, col=1)
+
+        # 2. EMA 20 Overlay Line
+        fig.add_trace(go.Scatter(
+            x=df_chart.index,
+            y=df_chart['EMA20'],
+            line=dict(color='#ff9800', width=1.5),
+            name="EMA 20"
+        ), row=1, col=1)
+
+        # 3. Volume Bars
+        vol_colors = ['#26a69a' if c >= o else '#ef5350' for c, o in zip(df_chart['Close'], df_chart['Open'])]
+        fig.add_trace(go.Bar(
+            x=df_chart.index,
+            y=df_chart['Volume'],
+            marker_color=vol_colors,
+            name="Volume",
+            showlegend=False
+        ), row=2, col=1)
+
+        fig.update_layout(
+            template="plotly_dark",
+            height=530,
+            margin=dict(l=10, r=10, t=30, b=10),
+            xaxis_rangeslider_visible=False,
+            paper_bgcolor="#131722",
+            plot_bgcolor="#131722"
+        )
+        st.plotly_chart(fig, use_container_width=True)
     else:
-        st.warning(f"Connecting feed for {active_chart_asset}... Please wait a moment.")
+        st.warning(f"Connecting market feed for {active_chart_asset}... Please wait.")
 
 with desk_right:
     st.markdown("#### ⚡ 1-Click Fast Execution")
@@ -252,6 +303,7 @@ with desk_right:
     step_val = 0.0001 if (is_fx and asset_ltp < 20) else 0.05
     curr_prefix = "$" if selected_universe == "US Equities (NASDAQ/NYSE)" else ("₹" if "NSE" in selected_universe else "")
 
+    # Strict 1:2 R:R Formula
     sl_dist = 1.0 * atr_val
     auto_sl_buy = round(asset_ltp - sl_dist, 4 if (is_fx and asset_ltp < 20) else 2)
     auto_tp_buy = round(asset_ltp + (2.0 * sl_dist), 4 if (is_fx and asset_ltp < 20) else 2)
@@ -285,7 +337,7 @@ with desk_right:
                     "status": "OPEN", "timeframe": chart_interval, "exit_price": 0.0, "exit_time": "", "pnl": 0.0
                 }])
                 save_sheet_trades(pd.concat([sheet_trades_df, row], ignore_index=True))
-                st.success("Buy Filled & Saved to Google Sheet!")
+                st.success("Buy Filled & Recorded in Google Sheet!")
                 st.rerun()
 
     with col_btn2:
@@ -305,7 +357,7 @@ with desk_right:
                     "status": "OPEN", "timeframe": chart_interval, "exit_price": 0.0, "exit_time": "", "pnl": 0.0
                 }])
                 save_sheet_trades(pd.concat([sheet_trades_df, row], ignore_index=True))
-                st.success("Sell Filled & Saved to Google Sheet!")
+                st.success("Sell Filled & Recorded in Google Sheet!")
                 st.rerun()
 
     st.markdown("---")
