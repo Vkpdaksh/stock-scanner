@@ -835,4 +835,120 @@ with btn_col1:
                 "tp1": custom_tp,
                 "tp2": selected_item.get("Target 2 (1:2 Ext)", custom_tp) if selected_item else custom_tp,
                 "qty": qty_input,
-                "invested_capital": required_fund
+                "invested_capital": required_fund,
+                "status": "OPEN",
+                "timeframe": swing_tf
+            }
+            db_insert_trade(new_trade)
+            db_update_portfolio(balance=available_balance - required_fund)
+            st.success(f"✅ ₹{required_fund:,.2f} locked in database for {chosen_asset}! Preserved across days.")
+            st.rerun()
+
+with btn_col2:
+    if st.button("🚀 Fire Real Order (Angel One Delivery)", use_container_width=True):
+        if is_beginner:
+            st.error("Beginner mode me Real Trading locked hai. Top se 'Pro Trader' chunein.")
+        else:
+            raw_sym = selected_item["Ticker"] if selected_item else chosen_asset
+            exch = "NSE" if ".NS" in raw_sym or "^NSE" in raw_sym else "MCX"
+            clean_sym = raw_sym.replace(".NS", "").replace("^", "")
+
+            ok, msg = place_order_smartapi(
+                symbol_token=clean_sym,
+                trading_symbol=clean_sym,
+                exchange=exch,
+                qty=qty_input,
+                transaction_type=side,
+                price=custom_exec_price
+            )
+            if ok:
+                st.success(f"🟢 REAL BROKER ORDER: {msg}")
+            else:
+                st.error(f"🔴 REAL BROKER ORDER FAILED: {msg}")
+
+# -------------------------------------------------------------
+# 14. COMPLETED TRADE HISTORY LEDGER
+# -------------------------------------------------------------
+if closed_trades:
+    with st.expander("📜 Completed Paper Trades Ledger", expanded=False):
+        history_df = pd.DataFrame(closed_trades)[["id", "date", "asset", "type", "entry", "exit_price", "qty", "pnl", "status", "exit_time"]]
+        st.dataframe(history_df, use_container_width=True, hide_index=True)
+
+# -------------------------------------------------------------
+# 15. TRADINGVIEW LIVE CHART
+# -------------------------------------------------------------
+st.markdown("### 📈 Interactive TradingView Live Chart")
+tv_symbol_map = {
+    "ALPHABET (GOOGLE)": "NASDAQ:GOOGL",
+    "NVIDIA": "NASDAQ:NVDA",
+    "TESLA": "NASDAQ:TSLA",
+    "APPLE": "NASDAQ:AAPL",
+    "MICROSOFT": "NASDAQ:MSFT",
+    "AMAZON": "NASDAQ:AMZN",
+    "META PLATFORMS": "NASDAQ:META",
+    "NIFTY 50": "NSE:NIFTY",
+    "BANK NIFTY": "NSE:BANKNIFTY",
+    "XAUUSD (Gold)": "TVC:GOLD",
+    "XAGUSD (Silver)": "TVC:SILVER",
+    "CRUDE OIL": "TVC:USOIL",
+    "COPPER": "COMEX:HG1!",
+    "NATURAL GAS": "NYMEX:NG1!",
+    "USD/INR": "FX_IDC:USDINR",
+    "EUR/USD": "FX:EURUSD",
+    "GBP/USD": "FX:GBPUSD",
+    "USD/JPY": "FX:USDJPY",
+    "AUD/USD": "FX:AUDUSD",
+    "USD/CAD": "FX:USDCAD",
+    "USD/CHF": "FX:USDCHF",
+    "NZD/USD": "FX:NZDUSD",
+    "EUR/GBP": "FX:EURGBP",
+    "EUR/JPY": "FX:EURJPY",
+    "GBP/JPY": "FX:GBPJPY",
+    "BITCOIN": "BINANCE:BTCUSDT",
+    "ETHEREUM": "BINANCE:ETHUSDT",
+    "SOLANA": "BINANCE:SOLUSDT"
+}
+
+chart_asset = st.selectbox("Chart Asset:", available_clean_names if available_clean_names else ["NIFTY 50"], key="tv_select")
+
+if chart_asset in tv_symbol_map:
+    tv_symbol = tv_symbol_map[chart_asset]
+else:
+    found_t = None
+    for t, m in NAME_MAP.items():
+        if m == chart_asset:
+            found_t = t
+            break
+    if found_t:
+        if ".NS" in found_t:
+            tv_symbol = "NSE:" + found_t.replace(".NS", "")
+        else:
+            tv_symbol = "NASDAQ:" + found_t
+    else:
+        tv_symbol = "NSE:" + chart_asset.replace(".NS", "")
+
+tv_interval = curr_tf_conf["tv"]
+
+tv_code = f"""
+<div class="tradingview-widget-container" style="height:550px; width:100%;">
+  <div id="tradingview_chart" style="height:550px;"></div>
+  <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
+  <script type="text/javascript">
+  new TradingView.widget({{
+    "autosize": true,
+    "symbol": "{tv_symbol}",
+    "interval": "{tv_interval}",
+    "timezone": "Asia/Kolkata",
+    "theme": "dark",
+    "style": "1",
+    "locale": "en",
+    "toolbar_bg": "#131722",
+    "enable_publishing": false,
+    "hide_side_toolbar": false,
+    "allow_symbol_change": true,
+    "container_id": "tradingview_chart"
+  }});
+  </script>
+</div>
+"""
+components.html(tv_code, height=560)
