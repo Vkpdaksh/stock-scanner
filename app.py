@@ -2,7 +2,7 @@ import os
 import json
 import urllib.request
 import urllib.parse
-import math
+import sqlite3
 import streamlit as st
 import streamlit.components.v1 as components
 import pandas as pd
@@ -20,37 +20,163 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-CONFIG_FILE = "system_mode.json"
-PAPER_TRADES_FILE = "paper_trades.json"
-EOD_FLAG_FILE = "eod_sent_flag.json"
-
-TELEGRAM_BOT_TOKEN = "8732059380:AAGF7qoak6yPiI5ToYGPLSVQQM4GChhKriI"
-TELEGRAM_CHAT_ID = "1527960238"
-
-def load_json(filepath, default):
-    if os.path.exists(filepath):
-        try:
-            with open(filepath, "r") as f:
-                return json.load(f)
-        except Exception:
-            pass
-    return default
-
-def save_json(filepath, data):
+def get_secret(key_name):
     try:
-        with open(filepath, "w") as f:
-            json.dump(data, f, indent=2)
+        if hasattr(st, "secrets") and key_name in st.secrets:
+            return str(st.secrets[key_name])
     except Exception:
         pass
+    return os.environ.get(key_name, "")
 
-system_config = load_json(CONFIG_FILE, {"mode": "Pro Trader (Full)", "execution": "Virtual Paper Trading"})
-paper_data = load_json(PAPER_TRADES_FILE, {"balance": 10000.0, "trades": []})
-eod_tracker = load_json(EOD_FLAG_FILE, {"last_sent_date": ""})
+TELEGRAM_BOT_TOKEN = get_secret("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = get_secret("TELEGRAM_CHAT_ID")
+ANGEL_API_KEY = get_secret("ANGEL_API_KEY")
+ANGEL_CLIENT_ID = get_secret("ANGEL_CLIENT_ID")
+ANGEL_MPIN = get_secret("ANGEL_MPIN")
+ANGEL_TOTP_KEY = get_secret("ANGEL_TOTP_KEY")
 
+# -------------------------------------------------------------
+# 2. PERSISTENT DATABASE ENGINE (SQLITE)
+# -------------------------------------------------------------
+DB_FILE = "persistent_terminal.db"
+
+def get_db_connection():
+    conn = sqlite3.connect(DB_FILE, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def init_db():
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS portfolio (
+            id INTEGER PRIMARY KEY,
+            balance REAL,
+            system_mode TEXT,
+            execution_type TEXT
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS trades (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT,
+            asset TEXT,
+            type TEXT,
+            entry REAL,
+            sl REAL,
+            tp1 REAL,
+            tp2 REAL,
+            qty INTEGER,
+            invested_capital REAL,
+            status TEXT,
+            timeframe TEXT,
+            exit_price REAL,
+            exit_time TEXT,
+            pnl REAL
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS eod_tracker (
+            id INTEGER PRIMARY KEY,
+            last_sent_date TEXT
+        )
+    """)
+    c.execute("SELECT id FROM portfolio WHERE id = 1")
+    if not c.fetchone():
+        c.execute("INSERT INTO portfolio (id, balance, system_mode, execution_type) VALUES (1, 10000.0, 'Pro Trader (Full)', 'Virtual Paper Trading')")
+    c.execute("SELECT id FROM eod_tracker WHERE id = 1")
+    if not c.fetchone():
+        c.execute("INSERT INTO eod_tracker (id, last_sent_date) VALUES (1, '')")
+    conn.commit()
+    conn.close()
+
+init_db()
+
+def db_get_portfolio():
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("SELECT balance, system_mode, execution_type FROM portfolio WHERE id = 1")
+    row = c.fetchone()
+    conn.close()
+    if row:
+        return float(row["balance"]), str(row["system_mode"]), str(row["execution_type"])
+    return 10000.0, "Pro Trader (Full)", "Virtual Paper Trading"
+
+def db_update_portfolio(balance=None, mode=None, execution=None):
+    conn = get_db_connection()
+    c = conn.cursor()
+    if balance is not None:
+        c.execute("UPDATE portfolio SET balance = ? WHERE id = 1", (balance,))
+    if mode is not None and execution is not None:
+        c.execute("UPDATE portfolio SET system_mode = ?, execution_type = ? WHERE id = 1", (mode, execution))
+    conn.commit()
+    conn.close()
+
+def db_get_all_trades():
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("SELECT * FROM trades ORDER BY id DESC")
+    rows = [dict(r) for r in c.fetchall()]
+    conn.close()
+    return rows
+
+def db_insert_trade(trade):
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("""
+        INSERT INTO trades (date, asset, type, entry, sl, tp1, tp2, qty, invested_capital, status, timeframe, exit_price, exit_time, pnl)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0.0, '', 0.0)
+    """, (
+        trade["date"], trade["asset"], trade["type"], trade["entry"], trade["sl"],
+        trade["tp1"], trade["tp2"], trade["qty"], trade["invested_capital"],
+        trade["status"], trade["timeframe"]
+    ))
+    conn.commit()
+    conn.close()
+
+def db_close_trade(trade_id, exit_price, exit_time, pnl, status):
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("""
+        UPDATE trades 
+        SET exit_price = ?, exit_time = ?, pnl = ?, status = ?
+        WHERE id = ?
+    """, (exit_price, exit_time, pnl, status, trade_id))
+    conn.commit()
+    conn.close()
+
+def db_reset():
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("DELETE FROM trades")
+    c.execute("UPDATE portfolio SET balance = 10000.0 WHERE id = 1")
+    conn.commit()
+    conn.close()
+
+def db_get_eod_flag():
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("SELECT last_sent_date FROM eod_tracker WHERE id = 1")
+    row = c.fetchone()
+    conn.close()
+    return row["last_sent_date"] if row else ""
+
+def db_set_eod_flag(date_str):
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("UPDATE eod_tracker SET last_sent_date = ? WHERE id = 1", (date_str,))
+    conn.commit()
+    conn.close()
+
+# -------------------------------------------------------------
+# 3. HELPER FUNCTIONS & TELEGRAM ENGINE
+# -------------------------------------------------------------
 def get_ist_now():
     return datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
 
 def send_telegram_msg(msg_text):
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        return False, "Telegram credentials are missing in st.secrets."
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
         payload = {
@@ -68,21 +194,8 @@ def send_telegram_msg(msg_text):
         return False, f"Error: {str(e)}"
 
 # -------------------------------------------------------------
-# 2. ANGEL ONE SMARTAPI ENGINE
+# 4. ANGEL ONE SMARTAPI SESSION
 # -------------------------------------------------------------
-def get_secret(key_name):
-    try:
-        if hasattr(st, "secrets") and key_name in st.secrets:
-            return str(st.secrets[key_name])
-    except Exception:
-        pass
-    return os.environ.get(key_name, "")
-
-ANGEL_API_KEY = get_secret("ANGEL_API_KEY")
-ANGEL_CLIENT_ID = get_secret("ANGEL_CLIENT_ID")
-ANGEL_MPIN = get_secret("ANGEL_MPIN")
-ANGEL_TOTP_KEY = get_secret("ANGEL_TOTP_KEY")
-
 @st.cache_resource(ttl=3600)
 def get_smartapi_session():
     if not (ANGEL_API_KEY and ANGEL_CLIENT_ID and ANGEL_MPIN and ANGEL_TOTP_KEY):
@@ -102,7 +215,7 @@ def get_smartapi_session():
 def place_order_smartapi(symbol_token, trading_symbol, exchange, qty, transaction_type, price=0):
     api = get_smartapi_session()
     if not api:
-        return False, "SmartAPI credentials missing! Add Angel One secrets or use Paper Desk."
+        return False, "SmartAPI credentials missing or failed to initialize session."
     try:
         prod_type = "DELIVERY" if exchange == "NSE" else "CARRYFORWARD"
         order_params = {
@@ -119,52 +232,35 @@ def place_order_smartapi(symbol_token, trading_symbol, exchange, qty, transactio
         }
         res = api.placeOrder(order_params)
         if res.get("status"):
-            return True, f"Real Swing Order Executed! Order ID: {res.get('data', {}).get('orderid')}"
+            return True, f"Real Swing Order Placed! Order ID: {res.get('data', {}).get('orderid')}"
         return False, res.get("message", "Order rejected by broker.")
     except Exception as e:
         return False, str(e)
 
 # -------------------------------------------------------------
-# 3. WATCHLISTS & ASSETS UNIVERSE
+# 5. WATCHLISTS & ASSETS UNIVERSE
 # -------------------------------------------------------------
 NSE_EQUITIES = [
     "^NSEI", "^NSEBANK",
-    "HDFCBANK.NS", "ICICIBANK.NS", "SBIN.NS", "AXISBANK.NS", "KOTAKBANK.NS", 
-    "INDUSINDBK.NS", "BAJFINANCE.NS", "BAJAJFINSV.NS", "SBILIFE.NS", "JIOFIN.NS", 
-    "ANGELONE.NS", "BSE.NS", "CDSL.NS", "MCX.NS",
-    "TCS.NS", "INFY.NS", "HCLTECH.NS", "WIPRO.NS", "LTIM.NS", 
-    "PERSISTENT.NS", "COFORGE.NS", "TATATECH.NS",
-    "TATAMOTORS.NS", "MARUTI.NS", "M&M.NS", "EICHERMOT.NS", "ASHOKLEY.NS", "EXIDEIND.NS",
-    "RELIANCE.NS", "ONGC.NS", "COALINDIA.NS", "NTPC.NS", "POWERGRID.NS", 
-    "TATAPOWER.NS", "ADANIGREEN.NS", "SUZLON.NS", "IREDA.NS",
-    "HAL.NS", "BEL.NS", "BDL.NS", "BHEL.NS", "MAZDOCK.NS", "COCHINSHIP.NS",
-    "RVNL.NS", "IRFC.NS", "IRCON.NS", "RAILTEL.NS", "HUDCO.NS", "NBCC.NS",
-    "TATASTEEL.NS", "JSWSTEEL.NS", "HINDALCO.NS", "SAIL.NS", "NMDC.NS", "NATIONALUM.NS",
-    "LT.NS", "ULTRACEMCO.NS", "GRASIM.NS", "DLF.NS", "LODHA.NS",
-    "ITC.NS", "HINDUNILVR.NS", "ASIANPAINT.NS", "TATACONSUM.NS", "TITAN.NS", 
-    "TRENT.NS", "ZOMATO.NS", "KALYANKJIL.NS", "DIXON.NS", "POLYCAB.NS", "KEI.NS",
-    "SUNPHARMA.NS", "CIPLA.NS", "DRREDDY.NS", "DIVISLAB.NS", "AUROPHARMA.NS", "LUPIN.NS",
-    "BHARTIARTL.NS", "ADANIENT.NS", "ADANIPORTS.NS"
+    "HDFCBANK.NS", "ICICIBANK.NS", "SBIN.NS", "AXISBANK.NS", "KOTAKBANK.NS",
+    "TCS.NS", "INFY.NS", "HCLTECH.NS", "WIPRO.NS", "TATAMOTORS.NS", "MARUTI.NS",
+    "RELIANCE.NS", "ONGC.NS", "NTPC.NS", "POWERGRID.NS", "TATAPOWER.NS",
+    "HAL.NS", "BEL.NS", "RVNL.NS", "IRFC.NS", "TATASTEEL.NS", "JSWSTEEL.NS",
+    "LT.NS", "ITC.NS", "HINDUNILVR.NS", "TITAN.NS", "SUNPHARMA.NS", "BHARTIARTL.NS"
 ]
 
 COMMODITIES_AND_FOREX = [
     "GC=F", "SI=F", "CL=F", "HG=F", "NG=F",
-    "INR=X", "EURUSD=X", "GBPUSD=X", "USDJPY=X", 
-    "AUDUSD=X", "USDCAD=X", "USDCHF=X", "NZDUSD=X",
-    "EURGBP=X", "EURJPY=X", "GBPJPY=X"
+    "INR=X", "EURUSD=X", "GBPUSD=X", "USDJPY=X"
 ]
 
 US_EQUITIES = [
-    "GOOGL", "NVDA", "TSLA", "AAPL", "MSFT", "AMZN", "META", "AMD", "NFLX", "PLTR",
-    "AVGO", "SMCI", "ARM", "QCOM", "INTC", "MU", "PANW", "CRWD", "COIN", "MSTR"
+    "GOOGL", "NVDA", "TSLA", "AAPL", "MSFT", "AMZN", "META", "AMD", "NFLX", "PLTR"
 ]
 
 CRYPTO_ASSETS = [
-    "BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD", "BNB-USD",
-    "ADA-USD", "DOGE-USD", "AVAX-USD", "LINK-USD", "SUI-USD"
+    "BTC-USD", "ETH-USD", "SOL-USD"
 ]
-
-ALL_SYSTEM_ASSETS = NSE_EQUITIES + COMMODITIES_AND_FOREX + US_EQUITIES + CRYPTO_ASSETS
 
 MARKET_UNIVERSES = {
     "Indian Equities & Indices (NSE)": NSE_EQUITIES,
@@ -185,23 +281,9 @@ NAME_MAP = {
     "EURUSD=X": "EUR/USD",
     "GBPUSD=X": "GBP/USD",
     "USDJPY=X": "USD/JPY",
-    "AUDUSD=X": "AUD/USD",
-    "USDCAD=X": "USD/CAD",
-    "USDCHF=X": "USD/CHF",
-    "NZDUSD=X": "NZD/USD",
-    "EURGBP=X": "EUR/GBP",
-    "EURJPY=X": "EUR/JPY",
-    "GBPJPY=X": "GBP/JPY",
     "BTC-USD": "BITCOIN",
     "ETH-USD": "ETHEREUM",
-    "SOL-USD": "SOLANA",
-    "GOOGL": "ALPHABET (GOOGLE)",
-    "NVDA": "NVIDIA",
-    "TSLA": "TESLA",
-    "AAPL": "APPLE",
-    "MSFT": "MICROSOFT",
-    "AMZN": "AMAZON",
-    "META": "META PLATFORMS"
+    "SOL-USD": "SOLANA"
 }
 
 def calculate_vwap(df):
@@ -210,7 +292,7 @@ def calculate_vwap(df):
     return (typical_price * vol).cumsum() / vol.cumsum()
 
 # -------------------------------------------------------------
-# 4. TOP HEADER & PROFILE SWITCHER
+# 6. HEADER & PROFILE SWITCHER
 # -------------------------------------------------------------
 st.title("⚡ Institutional Swing Trading Terminal")
 
@@ -222,13 +304,15 @@ cur_mins = ist_now.hour * 60 + ist_now.minute
 is_nse_open = (ist_now.weekday() < 5) and (555 <= cur_mins <= 930)
 session_text = "🟢 NSE SESSION OPEN" if is_nse_open else "🔴 NSE SESSION CLOSED"
 
+saved_balance, saved_mode, saved_execution = db_get_portfolio()
+
 col_mode, col_exec, col_tf = st.columns([1.5, 1.5, 1.2])
 
 with col_mode:
     selected_mode = st.selectbox(
-        "👤 Select Profile Mode:",
+        "👤 Profile Mode:",
         ["Beginner (Safe)", "Pro Trader (Full)"],
-        index=1 if system_config.get("mode") == "Pro Trader (Full)" else 0
+        index=1 if saved_mode == "Pro Trader (Full)" else 0
     )
 
 is_beginner = (selected_mode == "Beginner (Safe)")
@@ -241,33 +325,27 @@ with col_exec:
         selected_execution = st.selectbox(
             "Execution Route:",
             ["Dual Engine (Paper + SmartAPI)", "Virtual Paper Trading", "Real Fund (SmartAPI)"],
-            index=0
+            index=0 if "Dual" in saved_execution else (2 if "Real" in saved_execution else 1)
         )
         execution_type = "Dual" if "Dual" in selected_execution else ("SmartAPI" if "SmartAPI" in selected_execution else "Paper Trading")
 
 with col_tf:
-    swing_tf = st.selectbox(
-        "⏱️ Swing Timeframe:",
-        ["1h (1 Hour)", "4h (4 Hours)", "1d (Daily)"],
-        index=0
-    )
+    swing_tf = st.selectbox("⏱️ Swing Timeframe:", ["1h (1 Hour)", "4h (4 Hours)", "1d (Daily)"], index=0)
 
-if system_config.get("mode") != selected_mode or system_config.get("execution") != execution_type:
-    system_config["mode"] = selected_mode
-    system_config["execution"] = execution_type
-    save_json(CONFIG_FILE, system_config)
+if saved_mode != selected_mode or saved_execution != execution_type:
+    db_update_portfolio(mode=selected_mode, execution=execution_type)
 
-st.caption(f"Status: **{session_text}** | Live Time: **{time_str}** | Sizing: **Strictly Capped to Available Cash**")
+st.caption(f"Status: **{session_text}** | Live Time: **{time_str}** | Database: **Persistent SQLite Attached**")
 
 # -------------------------------------------------------------
-# 5. CAPITAL SIZING & RISK ALLOCATION DESK
+# 7. CAPITAL SIZING & RISK ALLOCATION DESK
 # -------------------------------------------------------------
-all_trades = paper_data.get("trades", [])
+all_trades = db_get_all_trades()
 open_trades = [t for t in all_trades if t.get("status") == "OPEN"]
 closed_trades = [t for t in all_trades if t.get("status") != "OPEN"]
 
-blocked_capital = sum([float(t.get("invested_capital", float(t.get("entry", 0)) * float(t.get("qty", 1)))) for t in open_trades])
-available_balance = max(0.0, float(paper_data.get("balance", 10000.0)))
+blocked_capital = sum([float(t.get("invested_capital", 0.0)) for t in open_trades])
+available_balance = saved_balance
 total_portfolio_equity = available_balance + blocked_capital
 
 st.markdown("### 🛡️ Risk Management & Capital Allocation Desk")
@@ -297,7 +375,7 @@ else:
 st.markdown("---")
 
 # -------------------------------------------------------------
-# 6. MARKET SCANNER ENGINE (CAPITAL-AWARE QUANTITY CALCULATION)
+# 8. MARKET SCANNER ENGINE
 # -------------------------------------------------------------
 available_universes = list(MARKET_UNIVERSES.keys())
 
@@ -308,7 +386,7 @@ elif 930 < cur_mins <= 1290:
 else:
     default_univ_index = available_universes.index("US Equities (NASDAQ/NYSE)")
 
-selected_universe = st.selectbox("Active Asset Universe (Auto-Switches by Time):", available_universes, index=default_univ_index)
+selected_universe = st.selectbox("Active Asset Universe:", available_universes, index=default_univ_index)
 tickers = MARKET_UNIVERSES[selected_universe]
 
 tf_map = {
@@ -334,7 +412,7 @@ if raw_data is not None:
         try:
             df = raw_data[ticker] if len(tickers) > 1 else raw_data
             df = df.dropna()
-            
+
             if "4h" in swing_tf and len(df) >= 8:
                 df = df.resample('4h').agg({
                     'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'
@@ -375,28 +453,17 @@ if raw_data is not None:
                 signal = "🟢 SWING BUY BREAKOUT"
                 active_breakouts += 1
                 trade_logic = f"Breakout above {res_level:.2f} with EMA20 support."
-                if (rvol >= 1.5 or is_special) and (c_close > ema50) and (rsi >= 55):
-                    grade = "Grade A+ (Institutional)"
-                elif (rvol >= 1.2 or is_special) and (rsi >= 50):
-                    grade = "Grade A"
-                else:
-                    grade = "Grade B (Swing)"
+                grade = "Grade A+ (Institutional)" if (rvol >= 1.5 or is_special) and (c_close > ema50) and (rsi >= 55) else "Grade A"
             elif is_breakdown:
                 signal = "🔴 SWING SELL BREAKDOWN"
                 active_breakouts += 1
                 trade_logic = f"Breakdown below {sup_level:.2f} with downward pressure."
-                if (rvol >= 1.5 or is_special) and (c_close < ema50) and (rsi <= 45):
-                    grade = "Grade A+ (Institutional)"
-                elif (rvol >= 1.2 or is_special) and (rsi <= 50):
-                    grade = "Grade A"
-                else:
-                    grade = "Grade B (Swing)"
+                grade = "Grade A+ (Institutional)" if (rvol >= 1.5 or is_special) and (c_close < ema50) and (rsi <= 45) else "Grade A"
             else:
                 signal = "⚪ ACCUMULATION / RANGE"
                 grade = "Neutral"
                 trade_logic = "Oscillating within consolidation range."
 
-            # 1.5x ATR Swing Stop Loss
             sl_dist = 1.5 * atr
             if "SELL" in signal:
                 sl = c_close + sl_dist
@@ -407,16 +474,9 @@ if raw_data is not None:
                 target_1 = c_close + (1.5 * sl_dist)
                 target_2 = c_close + (3.0 * sl_dist)
 
-            # ========================================================
-            # CAPITAL-AWARE EXACT POSITION SIZING FORMULA
-            # ========================================================
             risk_per_unit = max(abs(c_close - sl), 0.0001)
             units_by_risk = int(risk_per_trade / risk_per_unit)
-            
-            # Kitne units khareedne ke liye cash available hai:
             units_by_capital = int(available_balance / c_close) if c_close > 0 else 0
-
-            # Safe unit dono ka minimum hoga (Zero overtrading):
             rec_size = min(units_by_risk, units_by_capital)
 
             if rec_size == 0 and units_by_risk > 0:
@@ -469,27 +529,22 @@ def get_live_price_for_asset(asset_name):
             return float(t_df['Close'].dropna().iloc[-1])
     except Exception:
         pass
-    try:
-        t_df = yf.download(asset_name, period="2d", interval="1h", progress=False)
-        if not t_df.empty:
-            return float(t_df['Close'].dropna().iloc[-1])
-    except Exception:
-        pass
     return None
 
 # -------------------------------------------------------------
-# 7. SWING MONITOR & CAPITAL RELEASE ENGINE
+# 9. SWING MONITOR & AUTOMATIC CAPITAL RELEASE
 # -------------------------------------------------------------
-needs_save = False
+needs_rerun = False
 
 for trade in all_trades:
     if trade.get("status") == "OPEN":
+        t_id = trade.get("id")
         a_name = trade.get("asset")
         c_ltp = get_live_price_for_asset(a_name) or trade.get("entry")
-        e_price = trade.get("entry")
-        s_price = trade.get("sl")
-        t_price = trade.get("tp1")
-        q = trade.get("qty")
+        e_price = float(trade.get("entry"))
+        s_price = float(trade.get("sl"))
+        t_price = float(trade.get("tp1"))
+        q = int(trade.get("qty"))
         side_type = trade.get("type")
         inv_fund = float(trade.get("invested_capital", e_price * q))
 
@@ -497,22 +552,20 @@ for trade in all_trades:
         tp_hit = (side_type == "BUY" and c_ltp >= t_price) or (side_type == "SELL" and c_ltp <= t_price)
 
         if sl_hit or tp_hit:
-            trade["status"] = "SL_HIT" if sl_hit else "TARGET_HIT"
-            trade["exit_price"] = c_ltp
-            trade["exit_time"] = ist_now.strftime("%Y-%m-%d %H:%M")
+            status_val = "SL_HIT" if sl_hit else "TARGET_HIT"
+            exit_time_val = ist_now.strftime("%Y-%m-%d %H:%M")
             pnl_realized = (c_ltp - e_price) * q if side_type == "BUY" else (e_price - c_ltp) * q
-            trade["pnl"] = pnl_realized
-            
-            # Release blocked fund + profit/loss back to balance
-            paper_data["balance"] += (inv_fund + pnl_realized)
-            needs_save = True
 
-if needs_save:
-    save_json(PAPER_TRADES_FILE, paper_data)
+            db_close_trade(t_id, c_ltp, exit_time_val, pnl_realized, status_val)
+            new_bal = available_balance + inv_fund + pnl_realized
+            db_update_portfolio(balance=new_bal)
+            needs_rerun = True
+
+if needs_rerun:
     st.rerun()
 
 # -------------------------------------------------------------
-# 8. EOD REPORT ENGINE
+# 10. EOD REPORT & TELEGRAM ENGINE
 # -------------------------------------------------------------
 today_trades = [t for t in all_trades if str(t.get("date", "")).startswith(today_date_str)]
 today_closed = [t for t in today_trades if t.get("status") != "OPEN"]
@@ -526,45 +579,44 @@ win_rate = (tp_hits_today / len(today_closed) * 100) if today_closed else 0.0
 def build_eod_message():
     sign = "+" if today_pnl >= 0 else ""
     return (
-        f"📊 <b>DAILY EOD SWING TRADING PERFORMANCE REPORT</b>\n"
+        f"📊 <b>DAILY EOD SWING TRADING REPORT</b>\n"
         f"📅 Date: {today_date_str} | 🕒 Time: {ist_now.strftime('%I:%M %p IST')}\n\n"
-        f"🔢 Total Swing Setups Today: {tot_alerts_today}\n"
+        f"🔢 Total Trades Today: {tot_alerts_today}\n"
         f"🎯 Targets Hit: {tp_hits_today} ✅\n"
-        f"🛑 Stop-Loss Hits: {sl_hits_today} ❌\n"
-        f"📈 Swing Win-Rate: {win_rate:.1f}%\n\n"
-        f"💵 Today's Realized P&L: <b>₹{sign}{today_pnl:,.2f}</b>\n"
+        f"🛑 SL Hit: {sl_hits_today} ❌\n"
+        f"📈 Win-Rate: {win_rate:.1f}%\n\n"
+        f"💵 Today's P&L: <b>₹{sign}{today_pnl:,.2f}</b>\n"
         f"💼 Available Cash: <b>₹{available_balance:,.2f}</b>\n"
-        f"🔒 Locked in Trades: <b>₹{blocked_capital:,.2f}</b>\n"
+        f"🔒 Locked Margin: <b>₹{blocked_capital:,.2f}</b>\n"
         f"⚡ Total Portfolio Equity: <b>₹{total_portfolio_equity:,.2f}</b>\n\n"
-        f"💡 Risk Status: Clean Execution (Zero Overtrading)."
+        f"💡 Risk Status: Clean Persistent Execution."
     )
 
 if ist_now.hour >= 18 and (ist_now.hour > 18 or ist_now.minute >= 30):
-    if eod_tracker.get("last_sent_date") != today_date_str:
+    last_sent = db_get_eod_flag()
+    if last_sent != today_date_str:
         sent, _ = send_telegram_msg(build_eod_message())
         if sent:
-            eod_tracker["last_sent_date"] = today_date_str
-            save_json(EOD_FLAG_FILE, eod_tracker)
+            db_set_eod_flag(today_date_str)
 
 # -------------------------------------------------------------
-# 9. VIRTUAL SWING PORTFOLIO WITH MARGIN LOCK DESK
+# 11. VIRTUAL SWING PORTFOLIO WITH PERSISTENCE
 # -------------------------------------------------------------
-st.markdown("### 💼 Virtual Swing Portfolio (Margin Locking Desk)")
+st.markdown("### 💼 Virtual Swing Portfolio (Persistent Desk)")
 total_lifetime_pnl = total_portfolio_equity - 10000.0
 
 p1, p2, p3, p4 = st.columns([1.5, 1.5, 1.5, 1.2])
 with p1:
-    st.metric("Available Virtual Cash", f"₹{available_balance:,.2f}")
+    st.metric("Available Cash", f"₹{available_balance:,.2f}")
 with p2:
-    st.metric("Locked in Open Trades", f"₹{blocked_capital:,.2f}")
+    st.metric("Locked in Trades", f"₹{blocked_capital:,.2f}")
 with p3:
     st.metric("Total Equity & P&L", f"₹{total_portfolio_equity:,.2f}", delta=f"₹{total_lifetime_pnl:+,.2f}")
 with p4:
     st.write("")
     if st.button("🔄 Reset to ₹10k"):
-        paper_data = {"balance": 10000.0, "trades": []}
-        save_json(PAPER_TRADES_FILE, paper_data)
-        st.success("Portfolio reset to ₹10,000!")
+        db_reset()
+        st.success("Database and portfolio reset to ₹10,000!")
         st.rerun()
 
 with st.expander("📊 Today's EOD Report & Telegram Dispatch", expanded=False):
@@ -581,24 +633,23 @@ with st.expander("📊 Today's EOD Report & Telegram Dispatch", expanded=False):
     if st.button("📤 Send EOD Report to Telegram Now"):
         ok, res_txt = send_telegram_msg(build_eod_message())
         if ok:
-            eod_tracker["last_sent_date"] = today_date_str
-            save_json(EOD_FLAG_FILE, eod_tracker)
-            st.success("✅ EOD Report Telegram par deliver ho gayi hai!")
+            db_set_eod_flag(today_date_str)
+            st.success("✅ EOD Report Telegram par send ho gayi!")
         else:
             st.error(f"❌ Telegram Error: {res_txt}")
 
 # Active Running Swing Positions
 if open_trades:
-    st.markdown("#### ⚡ Active Open Swing Positions (Capital Blocked)")
+    st.markdown("#### ⚡ Active Open Swing Positions (Preserved Across Days)")
     for idx, trade in enumerate(open_trades):
+        t_id = trade.get("id")
         asset_name = trade.get('asset')
-        current_ltp = get_live_price_for_asset(asset_name) or trade.get('entry')
-
-        entry_price = trade.get('entry')
-        qty = trade.get('qty')
+        current_ltp = get_live_price_for_asset(asset_name) or float(trade.get('entry'))
+        entry_price = float(trade.get('entry'))
+        qty = int(trade.get('qty'))
         t_type = trade.get('type')
-        sl_price = trade.get('sl')
-        tp1_price = trade.get('tp1')
+        sl_price = float(trade.get('sl'))
+        tp1_price = float(trade.get('tp1'))
         inv_amount = float(trade.get("invested_capital", entry_price * qty))
 
         is_fx = any(fx in str(asset_name).upper() for fx in ["USD", "EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "NZD", "BTC", "ETH", "SOL", "XAU", "XAG", "GOLD", "SILVER"])
@@ -614,8 +665,9 @@ if open_trades:
                 <div style="display: flex; justify-content: space-between; align-items: center;">
                     <div>
                         <strong style="font-size: 16px;">{asset_name}</strong> 
-                        <span style="background: {'#1b5e20' if t_type=='BUY' else '#b71c1c'}; color: white; padding: 2px 6px; border-radius: 4px; font-size: 11px; margin-left: 6px;">{t_type} (SWING)</span>
+                        <span style="background: {'#1b5e20' if t_type=='BUY' else '#b71c1c'}; color: white; padding: 2px 6px; border-radius: 4px; font-size: 11px; margin-left: 6px;">{t_type}</span>
                         <span style="color: #ffb74d; font-size: 12px; margin-left: 10px;">🔒 Locked: ₹{inv_amount:,.2f}</span>
+                        <span style="color: #90caf9; font-size: 11px; margin-left: 10px;">Entry: {trade.get('date')}</span>
                     </div>
                     <div style="font-size: 15px; font-weight: bold; color: {pnl_color}; background: {pnl_bg}; padding: 2px 8px; border-radius: 4px;">
                         P&L: {fmt.format(live_pnl)}
@@ -633,21 +685,15 @@ if open_trades:
 
         col_sq1, col_sq2 = st.columns([6, 1])
         with col_sq2:
-            if st.button(f"🔴 Exit #{idx+1}", key=f"sq_off_{idx}"):
-                trade["status"] = "MANUAL_EXIT"
-                trade["exit_price"] = current_ltp
-                trade["exit_time"] = ist_now.strftime("%Y-%m-%d %H:%M")
+            if st.button(f"🔴 Exit #{idx+1}", key=f"exit_pos_{t_id}"):
                 pnl_realized = (current_ltp - entry_price) * qty if t_type == "BUY" else (entry_price - current_ltp) * qty
-                trade["pnl"] = pnl_realized
-                
-                # Release margin + P&L back to cash
-                paper_data["balance"] += (inv_amount + pnl_realized)
-                save_json(PAPER_TRADES_FILE, paper_data)
-                st.success(f"Released ₹{inv_amount:,.2f} + P&L back to Available Balance!")
+                db_close_trade(t_id, current_ltp, ist_now.strftime("%Y-%m-%d %H:%M"), pnl_realized, "MANUAL_EXIT")
+                db_update_portfolio(balance=available_balance + inv_amount + pnl_realized)
+                st.success("Trade closed & cash released!")
                 st.rerun()
 
 # -------------------------------------------------------------
-# 10. METRICS & MONITORING TABLE
+# 12. METRICS & MONITORING TABLE
 # -------------------------------------------------------------
 m1, m2, m3, m4 = st.columns(4)
 with m1:
@@ -663,10 +709,10 @@ if records:
     df_display = pd.DataFrame(records).drop(columns=["Ticker", "Size", "ActualUnits", "VWAP", "Breakout_Level", "Decimals"])
     st.dataframe(df_display, use_container_width=True, hide_index=True)
 else:
-    st.info(f"Currently scanning {selected_universe} on **{swing_tf}**. No swing breakout setups formed at this bar.")
+    st.info(f"Scanning {selected_universe} on **{swing_tf}**. No swing breakouts at this moment.")
 
 # -------------------------------------------------------------
-# 11. DUAL ORDER EXECUTION DESK (WITH ACCURATE CAPITAL SIZING)
+# 13. DUAL ORDER EXECUTION DESK
 # -------------------------------------------------------------
 st.markdown("### ⚡ Order Execution Desk (Dual Engine: Paper + Real Broker)")
 ord_col1, ord_col2, ord_col3, ord_col4 = st.columns([1.8, 1.2, 1.2, 1.8])
@@ -692,7 +738,6 @@ dec_format = "%.4f" if is_forex_asset else "%.2f"
 dec_step = 0.0001 if is_forex_asset else 0.05
 min_val = 0.0001 if is_forex_asset else 0.01
 
-# Calculate auto-safe qty for order desk based on available cash
 auto_units_by_capital = int(available_balance / default_ltp) if default_ltp > 0 else 0
 auto_suggested_qty = selected_item["Size"] if selected_item else min(1, auto_units_by_capital)
 default_order_qty = max(1, min(auto_suggested_qty, auto_units_by_capital)) if auto_units_by_capital > 0 else 1
@@ -715,9 +760,9 @@ with sl_tp_col2:
 required_fund = float(custom_exec_price * qty_input)
 
 if required_fund > available_balance:
-    st.warning(f"⚠️ **Required Fund:** ₹{required_fund:,.2f} | **Available Balance:** ₹{available_balance:,.2f} (Over-allocation warning)")
+    st.warning(f"⚠️ **Required Fund:** ₹{required_fund:,.2f} | **Available Balance:** ₹{available_balance:,.2f} (Insufficient Balance)")
 else:
-    st.success(f"✅ **Required Fund:** ₹{required_fund:,.2f} | **Available Balance:** ₹{available_balance:,.2f} (Within safe capital limit)")
+    st.success(f"✅ **Required Fund:** ₹{required_fund:,.2f} | **Available Balance:** ₹{available_balance:,.2f}")
 
 st.write("")
 btn_col1, btn_col2 = st.columns(2)
@@ -725,7 +770,7 @@ btn_col1, btn_col2 = st.columns(2)
 with btn_col1:
     if st.button("📥 Record Virtual Swing Trade", use_container_width=True):
         if required_fund > available_balance:
-            st.error(f"❌ **Trade Rejected to Stop Overtrading!** You need ₹{required_fund:,.2f}, but available cash is only ₹{available_balance:,.2f}. Reduce quantity or close open trades.")
+            st.error(f"❌ **Trade Rejected!** Balance ₹{available_balance:,.2f} is less than required ₹{required_fund:,.2f}.")
         else:
             new_trade = {
                 "date": ist_now.strftime("%Y-%m-%d %H:%M"),
@@ -740,17 +785,15 @@ with btn_col1:
                 "status": "OPEN",
                 "timeframe": swing_tf
             }
-            # Deduct invested capital from available virtual balance
-            paper_data["balance"] -= required_fund
-            paper_data["trades"].append(new_trade)
-            save_json(PAPER_TRADES_FILE, paper_data)
-            st.success(f"✅ ₹{required_fund:,.2f} Locked in {chosen_asset}! Trade running with safe capital discipline.")
+            db_insert_trade(new_trade)
+            db_update_portfolio(balance=available_balance - required_fund)
+            st.success(f"✅ ₹{required_fund:,.2f} locked in database for {chosen_asset}! Trade preserved for next day.")
             st.rerun()
 
 with btn_col2:
     if st.button("🚀 Fire Real Order (Angel One Delivery)", use_container_width=True):
         if is_beginner:
-            st.error("Beginner mode me Real Trading locked hai. Top profile se 'Pro Trader (Full)' select karein.")
+            st.error("Beginner mode me Real Trading locked hai. Top se 'Pro Trader' chunein.")
         else:
             raw_sym = selected_item["Ticker"] if selected_item else chosen_asset
             exch = "NSE" if ".NS" in raw_sym or "^NSE" in raw_sym else "MCX"
@@ -770,92 +813,43 @@ with btn_col2:
                 st.error(f"🔴 REAL BROKER ORDER FAILED: {msg}")
 
 # -------------------------------------------------------------
-# 12. COMPLETED TRADE HISTORY LEDGER
+# 14. COMPLETED TRADE HISTORY LEDGER
 # -------------------------------------------------------------
 if closed_trades:
     with st.expander("📜 Completed Paper Trades Ledger", expanded=False):
-        history_df = pd.DataFrame(closed_trades)
+        history_df = pd.DataFrame(closed_trades)[["id", "date", "asset", "type", "entry", "exit_price", "qty", "pnl", "status", "exit_time"]]
         st.dataframe(history_df, use_container_width=True, hide_index=True)
 
 # -------------------------------------------------------------
-# 13. TRADINGVIEW LIVE CHART (SYNCED WITH SWING TIMEFRAME)
+# 15. TRADINGVIEW LIVE CHART
 # -------------------------------------------------------------
 st.markdown("### 📈 Interactive TradingView Live Chart")
-
-c_sel_col1, c_sel_col2 = st.columns([3, 1])
-with c_sel_col1:
-    chart_asset = st.selectbox("Select Asset to View Chart:", available_clean_names if available_clean_names else ["ALPHABET (GOOGLE)"])
-
 tv_symbol_map = {
     "ALPHABET (GOOGLE)": "NASDAQ:GOOGL",
-    "GOOGLE": "NASDAQ:GOOGL",
-    "GOOGL": "NASDAQ:GOOGL",
     "NVIDIA": "NASDAQ:NVDA",
-    "NVDA": "NASDAQ:NVDA",
     "TESLA": "NASDAQ:TSLA",
-    "TSLA": "NASDAQ:TSLA",
     "APPLE": "NASDAQ:AAPL",
-    "AAPL": "NASDAQ:AAPL",
     "MICROSOFT": "NASDAQ:MSFT",
-    "MSFT": "NASDAQ:MSFT",
-    "AMAZON": "NASDAQ:AMZN",
-    "AMZN": "NASDAQ:AMZN",
-    "META PLATFORMS": "NASDAQ:META",
-    "META": "NASDAQ:META",
-    "AMD": "NASDAQ:AMD",
-    "NFLX": "NASDAQ:NFLX",
-    "PLTR": "NASDAQ:PLTR",
     "NIFTY 50": "NSE:NIFTY",
     "BANK NIFTY": "NSE:BANKNIFTY",
     "XAUUSD (Gold)": "TVC:GOLD",
     "XAGUSD (Silver)": "TVC:SILVER",
     "CRUDE OIL": "TVC:USOIL",
-    "COPPER": "COMEX:HG1!",
-    "NATURAL GAS": "NYMEX:NG1!",
     "USD/INR": "FX_IDC:USDINR",
     "EUR/USD": "FX:EURUSD",
-    "GBP/USD": "FX:GBPUSD",
-    "USD/JPY": "FX:USDJPY",
-    "AUD/USD": "FX:AUDUSD",
-    "USD/CAD": "FX:USDCAD",
-    "USD/CHF": "FX:USDCHF",
-    "NZD/USD": "FX:NZDUSD",
-    "EUR/GBP": "FX:EURGBP",
-    "EUR/JPY": "FX:EURJPY",
-    "GBPJPY=X": "FX:GBPJPY",
-    "BITCOIN": "BINANCE:BTCUSDT",
-    "ETHEREUM": "BINANCE:ETHUSDT",
-    "SOLANA": "BINANCE:SOLUSDT"
+    "BITCOIN": "BINANCE:BTCUSDT"
 }
 
-if chart_asset in tv_symbol_map:
-    tv_symbol = tv_symbol_map[chart_asset]
-else:
-    found_t = None
-    for t, m in NAME_MAP.items():
-        if m == chart_asset:
-            found_t = t
-            break
-    if found_t:
-        if ".NS" in found_t:
-            tv_symbol = "NSE:" + found_t.replace(".NS", "")
-        else:
-            tv_symbol = "NASDAQ:" + found_t
-    else:
-        tv_symbol = "NSE:" + chart_asset.replace(".NS", "")
-
+chart_asset = st.selectbox("Chart Asset:", available_clean_names if available_clean_names else ["NIFTY 50"], key="tv_select")
+tv_symbol = tv_symbol_map.get(chart_asset, "NSE:" + chart_asset.replace(".NS", ""))
 tv_interval = curr_tf_conf["tv"]
-
-with c_sel_col2:
-    st.caption(f"TradingView Symbol: **{tv_symbol}** | Timeframe: **{swing_tf}**")
 
 tv_code = f"""
 <div class="tradingview-widget-container" style="height:550px; width:100%;">
   <div id="tradingview_chart" style="height:550px;"></div>
   <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
   <script type="text/javascript">
-  new TradingView.widget(
-  {{
+  new TradingView.widget({{
     "autosize": true,
     "symbol": "{tv_symbol}",
     "interval": "{tv_interval}",
@@ -868,8 +862,7 @@ tv_code = f"""
     "hide_side_toolbar": false,
     "allow_symbol_change": true,
     "container_id": "tradingview_chart"
-  }}
-  );
+  }});
   </script>
 </div>
 """
