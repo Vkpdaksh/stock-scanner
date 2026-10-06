@@ -257,30 +257,58 @@ with desk_left:
     active_ticker = resolve_ticker(active_chart_asset)
     tv_symbol = get_tv_symbol(active_chart_asset, active_ticker)
 
-    tv_html = f"""
+   tv_html = f"""
     <div class="tradingview-widget-container" style="height:530px; width:100%;">
-      <div id="tv_chart" style="height:530px;"></div>
-      <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
-      <script type="text/javascript">
-      new TradingView.widget({{
-        "autosize": true,
-        "symbol": "{tv_symbol}",
-        "interval": "{tv_tf.replace('m','')}",
-        "timezone": "Asia/Kolkata",
-        "theme": "dark",
-        "style": "1",
-        "locale": "en",
-        "toolbar_bg": "#131722",
-        "enable_publishing": false,
-        "hide_side_toolbar": false,
-        "allow_symbol_change": true,
-        "container_id": "tv_chart"
-      }});
-      </script>
+      ...
     </div>
     """
     components.html(tv_html, height=540)
+```[cite: 11]
 
+---
+
+### Aur iski jagah ye code paste kar dein:
+
+```python
+    # Free NSE Embed Widget Fix (Blocks 'Only on TradingView' popup)
+    clean_tf = tv_tf.replace('m', '')
+    if "NSE:" in tv_symbol:
+        tv_html = f"""
+        <div class="tradingview-widget-container" style="height:530px; width:100%;">
+          <iframe 
+            src="https://s.tradingview.com/widgetembed/?symbol={tv_symbol}&interval={clean_tf}&hidesidetoolbar=0&symboledit=1&saveimage=1&toolbarbg=f1f3f6&studies=[]&theme=dark&style=1&timezone=Asia%2FKolkata&locale=en" 
+            width="100%" 
+            height="520" 
+            frameborder="0" 
+            allowtransparency="true" 
+            scrolling="no">
+          </iframe>
+        </div>
+        """
+    else:
+        tv_html = f"""
+        <div class="tradingview-widget-container" style="height:530px; width:100%;">
+          <div id="tv_chart" style="height:530px;"></div>
+          <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
+          <script type="text/javascript">
+          new TradingView.widget({{
+            "autosize": true,
+            "symbol": "{tv_symbol}",
+            "interval": "{clean_tf}",
+            "timezone": "Asia/Kolkata",
+            "theme": "dark",
+            "style": "1",
+            "locale": "en",
+            "toolbar_bg": "#131722",
+            "enable_publishing": false,
+            "hide_side_toolbar": false,
+            "allow_symbol_change": true,
+            "container_id": "tv_chart"
+          }});
+          </script>
+        </div>
+        """
+    components.html(tv_html, height=540)
 with desk_right:
     st.markdown("#### ⚡ 1-Click Fast Execution")
     
