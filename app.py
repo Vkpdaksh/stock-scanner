@@ -732,4 +732,172 @@ if open_trades:
         entry_price = float(trade.get('entry'))
         qty = int(trade.get('qty'))
         t_type = trade.get('type')
-        sl_price = float(trade.
+        sl_price = float(trade.get('sl'))
+        tp1_price = float(trade.get('tp1'))
+        inv_amount = float(trade.get("invested_capital", entry_price * qty))
+
+        is_fx = any(fx in str(asset_name).upper() for fx in ["USD", "EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "NZD", "BTC", "ETH", "SOL", "XAU", "XAG", "GOLD", "SILVER"])
+        fmt = "{:+,.4f}" if is_fx else "{:+,.2f}"
+        disp_fmt = "{:.4f}" if is_fx else "{:.2f}"
+
+        live_pnl = (current_ltp - entry_price) * qty if t_type == "BUY" else (entry_price - current_ltp) * qty
+        pnl_color = "#2e7d32" if live_pnl >= 0 else "#c62828"
+        pnl_bg = "#e8f5e9" if live_pnl >= 0 else "#ffebee"
+
+        st.markdown(f"""
+            <div style="background-color: #1e1e2f; border-left: 5px solid {pnl_color}; padding: 12px; border-radius: 6px; margin-bottom: 10px; color: #ffffff;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <div>
+                        <strong style="font-size: 16px;">{asset_name}</strong> 
+                        <span style="background: {'#1b5e20' if t_type=='BUY' else '#b71c1c'}; color: white; padding: 2px 6px; border-radius: 4px; font-size: 11px; margin-left: 6px;">{t_type}</span>
+                        <span style="color: #ffb74d; font-size: 12px; margin-left: 10px;">🔒 Locked: ₹{inv_amount:,.2f}</span>
+                        <span style="color: #90caf9; font-size: 11px; margin-left: 10px;">Entry: {trade.get('date')}</span>
+                    </div>
+                    <div style="font-size: 15px; font-weight: bold; color: {pnl_color}; background: {pnl_bg}; padding: 2px 8px; border-radius: 4px;">
+                        P&L: {fmt.format(live_pnl)}
+                    </div>
+                </div>
+                <div style="display: flex; justify-content: space-between; margin-top: 8px; font-size: 12px; color: #b0bec5;">
+                    <span>Qty: <b>{qty}</b></span>
+                    <span>Entry: <b>{disp_fmt.format(entry_price)}</b></span>
+                    <span>LTP: <b style="color: #fff;">{disp_fmt.format(current_ltp)}</b></span>
+                    <span>SL: <b style="color: #ef5350;">{disp_fmt.format(sl_price)}</b></span>
+                    <span>Target 1: <b style="color: #66bb6a;">{disp_fmt.format(tp1_price)}</b></span>
+                </div>
+            </div>
+        """, unsafe_allow_html=True)
+
+        col_sq1, col_sq2 = st.columns([6, 1])
+        with col_sq2:
+            if st.button(f"🔴 Exit #{idx+1}", key=f"exit_pos_{t_id}"):
+                pnl_realized = (current_ltp - entry_price) * qty if t_type == "BUY" else (entry_price - current_ltp) * qty
+                db_close_trade(t_id, current_ltp, ist_now.strftime("%Y-%m-%d %H:%M"), pnl_realized, "MANUAL_EXIT")
+                db_update_portfolio(balance=available_balance + inv_amount + pnl_realized)
+                st.success("Trade closed & cash released!")
+                st.rerun()
+
+# -------------------------------------------------------------
+# 13. METRICS & MONITORING TABLE
+# -------------------------------------------------------------
+m1, m2, m3, m4 = st.columns(4)
+with m1:
+    st.metric("Universe Tracked", len(tickers))
+with m2:
+    st.metric("Active Breakouts", active_breakouts)
+with m3:
+    st.metric("Available Balance", f"₹{available_balance:,.2f}")
+with m4:
+    st.metric("Active Timeframe", swing_tf)
+
+if records:
+    df_display = pd.DataFrame(records).drop(columns=["Ticker", "Size", "ActualUnits", "VWAP", "Breakout_Level", "Decimals"])
+    st.dataframe(df_display, use_container_width=True, hide_index=True)
+else:
+    st.info(f"Scanning {selected_universe} on **{swing_tf}**. No swing breakouts at this moment.")
+
+# -------------------------------------------------------------
+# 14. DUAL ORDER EXECUTION DESK
+# -------------------------------------------------------------
+st.markdown("### ⚡ Order Execution Desk (Dual Engine: Paper + Real Broker)")
+ord_col1, ord_col2, ord_col3, ord_col4 = st.columns([1.8, 1.2, 1.2, 1.8])
+
+records_assets = [r["Asset"] for r in records] if records else []
+all_extra_assets = [NAME_MAP.get(t, t.replace(".NS", "").replace("^", "").replace("-USD", "")) for t in tickers]
+available_clean_names = sorted(list(set(records_assets + all_extra_assets)))
+
+with ord_col1:
+    chosen_asset = st.selectbox("Contract / Asset:", available_clean_names if available_clean_names else ["None"])
+
+selected_item = next((r for r in records if r["Asset"] == chosen_asset), None)
+live_val_tuple = get_live_candle_data(chosen_asset)
+live_val = live_val_tuple[0] or 100.0
+
+default_ltp = selected_item["LTP"] if selected_item else live_val
+default_sl = selected_item["Stop Loss"] if selected_item else round(default_ltp * 0.98, 4 if ("=" in str(chosen_asset) or "USD" in str(chosen_asset)) else 2)
+default_tp = selected_item["Target 1 (1:1 Safe)"] if selected_item else round(default_ltp * 1.02, 4 if ("=" in str(chosen_asset) or "USD" in str(chosen_asset)) else 2)
+
+is_forex_asset = any(fx in str(chosen_asset).upper() for fx in [
+    "USD", "EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "NZD", "INR", "GOLD", "SILVER", "XAU", "XAG", "GAS"
+])
+dec_format = "%.4f" if is_forex_asset else "%.2f"
+dec_step = 0.0001 if is_forex_asset else 0.05
+min_val = 0.0001 if is_forex_asset else 0.01
+
+auto_units_by_capital = int(available_balance / default_ltp) if default_ltp > 0 else 0
+auto_suggested_qty = selected_item["Size"] if selected_item else min(1, auto_units_by_capital)
+default_order_qty = max(1, min(auto_suggested_qty, auto_units_by_capital)) if auto_units_by_capital > 0 else 1
+
+with ord_col2:
+    side = st.selectbox("Direction:", ["BUY", "SELL"])
+
+with ord_col3:
+    qty_input = st.number_input("Qty / Lots:", min_value=1, value=default_order_qty, step=1)
+
+with ord_col4:
+    custom_exec_price = st.number_input("Execution Price:", min_value=min_val, value=float(default_ltp), step=dec_step, format=dec_format)
+
+sl_tp_col1, sl_tp_col2 = st.columns(2)
+with sl_tp_col1:
+    custom_sl = st.number_input("Stop Loss (SL):", min_value=min_val, value=float(default_sl), step=dec_step, format=dec_format)
+with sl_tp_col2:
+    custom_tp = st.number_input("Target Price (TP):", min_value=min_val, value=float(default_tp), step=dec_step, format=dec_format)
+
+required_fund = float(custom_exec_price * qty_input)
+
+if required_fund > available_balance:
+    st.warning(f"⚠️ **Required Fund:** ₹{required_fund:,.2f} | **Available Balance:** ₹{available_balance:,.2f} (Insufficient Balance)")
+else:
+    st.success(f"✅ **Required Fund:** ₹{required_fund:,.2f} | **Available Balance:** ₹{available_balance:,.2f}")
+
+st.write("")
+btn_col1, btn_col2 = st.columns(2)
+
+with btn_col1:
+    if st.button("📥 Record Virtual Swing Trade", use_container_width=True):
+        if required_fund > available_balance:
+            st.error(f"❌ **Trade Rejected!** Balance ₹{available_balance:,.2f} is less than required ₹{required_fund:,.2f}.")
+        else:
+            new_trade = {
+                "date": ist_now.strftime("%Y-%m-%d %H:%M"),
+                "asset": chosen_asset,
+                "type": side,
+                "entry": custom_exec_price,
+                "sl": custom_sl,
+                "tp1": custom_tp,
+                "tp2": selected_item.get("Target 2 (1:2 Ext)", custom_tp) if selected_item else custom_tp,
+                "qty": qty_input,
+                "invested_capital": required_fund,
+                "status": "OPEN",
+                "timeframe": swing_tf
+            }
+            db_insert_trade(new_trade)
+            db_update_portfolio(balance=available_balance - required_fund)
+            st.success(f"✅ ₹{required_fund:,.2f} locked in database for {chosen_asset}! Preserved across days.")
+            st.rerun()
+
+with btn_col2:
+    if st.button("🚀 Fire Real Order (Angel One Delivery)", use_container_width=True):
+        if is_beginner:
+            st.error("Beginner mode me Real Trading locked hai. Top se 'Pro Trader' chunein.")
+        else:
+            raw_sym = selected_item["Ticker"] if selected_item else chosen_asset
+            exch = "NSE" if ".NS" in raw_sym or "^NSE" in raw_sym else "MCX"
+            clean_sym = raw_sym.replace(".NS", "").replace("^", "")
+
+            ok, msg = place_order_smartapi(
+                symbol_token=clean_sym,
+                trading_symbol=clean_sym,
+                exchange=exch,
+                qty=qty_input,
+                transaction_type=side,
+                price=custom_exec_price
+            )
+            if ok:
+                st.success(f"🟢 REAL BROKER ORDER: {msg}")
+            else:
+                st.error(f"🔴 REAL BROKER ORDER FAILED: {msg}")
+
+# -------------------------------------------------------------
+# 15. COMPLETED TRADE HISTORY LEDGER
+# -------------------------------------------------------------
+if
