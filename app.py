@@ -2,7 +2,6 @@ import os
 import json
 import urllib.request
 import urllib.parse
-import sqlite3
 import streamlit as st
 import streamlit.components.v1 as components
 import pandas as pd
@@ -10,6 +9,7 @@ import numpy as np
 import yfinance as yf
 import ta
 from datetime import datetime, timezone, timedelta
+from streamlit_gsheets import GSheetsConnection
 
 # -------------------------------------------------------------
 # 1. PAGE SETUP & CONFIG
@@ -36,137 +36,39 @@ ANGEL_MPIN = get_secret("ANGEL_MPIN")
 ANGEL_TOTP_KEY = get_secret("ANGEL_TOTP_KEY")
 
 # -------------------------------------------------------------
-# 2. PERSISTENT STORAGE ENGINE
+# 2. GOOGLE SHEETS CLOUD STORAGE ENGINE (NEVER RESETS)
 # -------------------------------------------------------------
-DB_FILE = "persistent_terminal.db"
+@st.cache_resource
+def get_sheets_connection():
+    return st.connection("gsheets", type=GSheetsConnection)
 
-def get_db_connection():
-    conn = sqlite3.connect(DB_FILE, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    return conn
+SHEET_COLUMNS = [
+    "id", "date", "asset", "type", "entry", "sl", "tp1", "tp2", 
+    "qty", "invested_capital", "status", "timeframe", "exit_price", "exit_time", "pnl"
+]
 
-def init_db():
-    conn = get_db_connection()
-    c = conn.cursor()
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS portfolio (
-            id INTEGER PRIMARY KEY,
-            balance REAL,
-            system_mode TEXT,
-            execution_type TEXT
-        )
-    """)
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS trades (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            date TEXT,
-            asset TEXT,
-            type TEXT,
-            entry REAL,
-            sl REAL,
-            tp1 REAL,
-            tp2 REAL,
-            qty INTEGER,
-            invested_capital REAL,
-            status TEXT,
-            timeframe TEXT,
-            exit_price REAL,
-            exit_time TEXT,
-            pnl REAL
-        )
-    """)
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS eod_tracker (
-            id INTEGER PRIMARY KEY,
-            last_sent_date TEXT
-        )
-    """)
-    c.execute("SELECT id FROM portfolio WHERE id = 1")
-    if not c.fetchone():
-        c.execute("INSERT INTO portfolio (id, balance, system_mode, execution_type) VALUES (1, 10000.0, 'Pro Trader (Full)', 'Virtual Paper Trading')")
-    c.execute("SELECT id FROM eod_tracker WHERE id = 1")
-    if not c.fetchone():
-        c.execute("INSERT INTO eod_tracker (id, last_sent_date) VALUES (1, '')")
-    conn.commit()
-    conn.close()
+def load_sheet_trades():
+    try:
+        conn = get_sheets_connection()
+        # Reads the first sheet (worksheet=0 / Portfolio)
+        df = conn.read(ttl="0s")
+        if df is None or df.empty:
+            return pd.DataFrame(columns=SHEET_COLUMNS)
+        for col in SHEET_COLUMNS:
+            if col not in df.columns:
+                df[col] = None
+        return df.dropna(how="all")
+    except Exception as e:
+        return pd.DataFrame(columns=SHEET_COLUMNS)
 
-init_db()
-
-def db_get_portfolio():
-    conn = get_db_connection()
-    c = conn.cursor()
-    c.execute("SELECT balance, system_mode, execution_type FROM portfolio WHERE id = 1")
-    row = c.fetchone()
-    conn.close()
-    if row:
-        return float(row["balance"]), str(row["system_mode"]), str(row["execution_type"])
-    return 10000.0, "Pro Trader (Full)", "Virtual Paper Trading"
-
-def db_update_portfolio(balance=None, mode=None, execution=None):
-    conn = get_db_connection()
-    c = conn.cursor()
-    if balance is not None:
-        c.execute("UPDATE portfolio SET balance = ? WHERE id = 1", (balance,))
-    if mode is not None and execution is not None:
-        c.execute("UPDATE portfolio SET system_mode = ?, execution_type = ? WHERE id = 1", (mode, execution))
-    conn.commit()
-    conn.close()
-
-def db_get_all_trades():
-    conn = get_db_connection()
-    c = conn.cursor()
-    c.execute("SELECT * FROM trades ORDER BY id DESC")
-    rows = [dict(r) for r in c.fetchall()]
-    conn.close()
-    return rows
-
-def db_insert_trade(trade):
-    conn = get_db_connection()
-    c = conn.cursor()
-    c.execute("""
-        INSERT INTO trades (date, asset, type, entry, sl, tp1, tp2, qty, invested_capital, status, timeframe, exit_price, exit_time, pnl)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0.0, '', 0.0)
-    """, (
-        trade["date"], trade["asset"], trade["type"], trade["entry"], trade["sl"],
-        trade["tp1"], trade["tp2"], trade["qty"], trade["invested_capital"],
-        trade["status"], trade["timeframe"]
-    ))
-    conn.commit()
-    conn.close()
-
-def db_close_trade(trade_id, exit_price, exit_time, pnl, status):
-    conn = get_db_connection()
-    c = conn.cursor()
-    c.execute("""
-        UPDATE trades 
-        SET exit_price = ?, exit_time = ?, pnl = ?, status = ?
-        WHERE id = ?
-    """, (exit_price, exit_time, pnl, status, trade_id))
-    conn.commit()
-    conn.close()
-
-def db_reset():
-    conn = get_db_connection()
-    c = conn.cursor()
-    c.execute("DELETE FROM trades")
-    c.execute("UPDATE portfolio SET balance = 10000.0 WHERE id = 1")
-    conn.commit()
-    conn.close()
-
-def db_get_eod_flag():
-    conn = get_db_connection()
-    c = conn.cursor()
-    c.execute("SELECT last_sent_date FROM eod_tracker WHERE id = 1")
-    row = c.fetchone()
-    conn.close()
-    return row["last_sent_date"] if row else ""
-
-def db_set_eod_flag(date_str):
-    conn = get_db_connection()
-    c = conn.cursor()
-    c.execute("UPDATE eod_tracker SET last_sent_date = ? WHERE id = 1", (date_str,))
-    conn.commit()
-    conn.close()
+def save_sheet_trades(df):
+    try:
+        conn = get_sheets_connection()
+        conn.update(data=df)
+        return True
+    except Exception as e:
+        st.error(f"Error saving to Google Sheets: {str(e)}")
+        return False
 
 # -------------------------------------------------------------
 # 3. HELPER FUNCTIONS & TELEGRAM
@@ -238,7 +140,7 @@ def place_order_smartapi(symbol_token, trading_symbol, exchange, qty, transactio
         return False, str(e)
 
 # -------------------------------------------------------------
-# 5. WATCHLISTS & ASSETS UNIVERSE
+# 5. WATCHLISTS & ASSETS UNIVERSE (COMPLETE ORIGINAL LIST)
 # -------------------------------------------------------------
 NSE_EQUITIES = [
     "^NSEI", "^NSEBANK",
@@ -330,15 +232,13 @@ time_str = ist_now.strftime("%I:%M:%S %p IST")
 today_date_str = ist_now.strftime("%Y-%m-%d")
 cur_mins = ist_now.hour * 60 + ist_now.minute
 
-saved_balance, saved_mode, saved_execution = db_get_portfolio()
-
 col_mode, col_exec, col_tf = st.columns([1.5, 1.5, 1.2])
 
 with col_mode:
     selected_mode = st.selectbox(
         "👤 Profile Mode:",
         ["Beginner (Safe)", "Pro Trader (Full)"],
-        index=1 if saved_mode == "Pro Trader (Full)" else 0
+        index=1
     )
 
 is_beginner = (selected_mode == "Beginner (Safe)")
@@ -351,27 +251,31 @@ with col_exec:
         selected_execution = st.selectbox(
             "Execution Route:",
             ["Dual Engine (Paper + SmartAPI)", "Virtual Paper Trading", "Real Fund (SmartAPI)"],
-            index=0 if "Dual" in saved_execution else (2 if "Real" in saved_execution else 1)
+            index=0
         )
         execution_type = "Dual" if "Dual" in selected_execution else ("SmartAPI" if "SmartAPI" in selected_execution else "Paper Trading")
 
 with col_tf:
     swing_tf = st.selectbox("⏱️ Swing Timeframe:", ["1h (1 Hour)", "4h (4 Hours)", "1d (Daily)"], index=0)
 
-if saved_mode != selected_mode or saved_execution != execution_type:
-    db_update_portfolio(mode=selected_mode, execution=execution_type)
+# Load persistent trades from Google Sheet
+sheet_trades_df = load_sheet_trades()
+all_trades = sheet_trades_df.to_dict(orient="records") if not sheet_trades_df.empty else []
+
+open_trades = [t for t in all_trades if str(t.get("status", "")).upper() == "OPEN"]
+closed_trades = [t for t in all_trades if str(t.get("status", "")).upper() not in ["OPEN", ""]]
+
+# Dynamic Portfolio Balance Calculation from 1 Sheet
+INITIAL_BASE_CAPITAL = 10000.0
+blocked_capital = sum([float(t.get("invested_capital", 0.0) or 0.0) for t in open_trades])
+realized_closed_pnl = sum([float(t.get("pnl", 0.0) or 0.0) for t in closed_trades])
+
+available_balance = INITIAL_BASE_CAPITAL + realized_closed_pnl - blocked_capital
+total_portfolio_equity = available_balance + blocked_capital
 
 # -------------------------------------------------------------
 # 7. CAPITAL SIZING & RISK ALLOCATION DESK
 # -------------------------------------------------------------
-all_trades = db_get_all_trades()
-open_trades = [t for t in all_trades if t.get("status") == "OPEN"]
-closed_trades = [t for t in all_trades if t.get("status") != "OPEN"]
-
-blocked_capital = sum([float(t.get("invested_capital", 0.0)) for t in open_trades])
-available_balance = saved_balance
-total_portfolio_equity = available_balance + blocked_capital
-
 st.markdown("### 🛡️ Risk Management & Capital Allocation Desk")
 r_col1, r_col2, r_col3, r_col4 = st.columns(4)
 
@@ -403,10 +307,6 @@ st.markdown("---")
 # -------------------------------------------------------------
 @st.cache_data(ttl=180)
 def verify_market_trading_today(benchmark_symbol):
-    """
-    Checks if a real bar has actually been printed today.
-    Eliminates 9:15-9:45 AM false alarms and holiday leaks completely.
-    """
     try:
         test_df = yf.download(benchmark_symbol, period="2d", interval="1d", progress=False)
         if not test_df.empty:
@@ -416,21 +316,19 @@ def verify_market_trading_today(benchmark_symbol):
     except Exception:
         return False
 
-# Indian market window check
 is_weekday = ist_now.weekday() < 5
 is_nse_hours = is_weekday and (555 <= cur_mins <= 930)
 
-# True Confirmation: If within trading hours, verify if benchmark printed today's bar
 if is_nse_hours:
     is_nse_active = verify_market_trading_today("^NSEI")
 else:
     is_nse_active = False
 
 session_text = "🟢 NSE LIVE TRADING" if is_nse_active else "🔴 NSE CLOSED / MARKET HOLIDAY"
-st.caption(f"Status: **{session_text}** | Live Time: **{time_str}** | R:R Model: **Minimum 1:2 Strictly Enforced**")
+st.caption(f"Status: **{session_text}** | Live Time: **{time_str}** | Storage: **Google Sheets (Zero Reset)**")
 
 # -------------------------------------------------------------
-# 9. MARKET SCANNER ENGINE (RATE-LIMIT PROTECTED)
+# 9. MARKET SCANNER ENGINE
 # -------------------------------------------------------------
 available_universes = list(MARKET_UNIVERSES.keys())
 
@@ -476,12 +374,10 @@ if raw_data is not None:
             if len(df) < 20:
                 continue
 
-            # ZERO-LEAK FILTER: If asset belongs to NSE and NSE is not confirmed live today, abort alert
             is_indian_asset = (".NS" in ticker or "^NSE" in ticker)
             if is_indian_asset and not is_nse_active:
                 continue
 
-            # Check candle timestamp against current date
             candle_date_str = str(df.index[-1].date())
             if is_indian_asset and candle_date_str != today_date_str:
                 continue
@@ -511,7 +407,6 @@ if raw_data is not None:
             rvol = (c_vol / avg_vol) if avg_vol > 0 else 1.0
             rvol_display = "Liquid" if is_special else f"{round(rvol, 2)}x"
 
-            # Strict Breakout Criteria
             is_breakout = (c_close > res_level) and (c_close > c_open) and (c_close > ema20) and (50 <= rsi <= 68)
             is_breakdown = (c_close < sup_level) and (c_close < c_open) and (c_close < ema20) and (32 <= rsi <= 50)
 
@@ -530,18 +425,16 @@ if raw_data is not None:
                 grade = "Neutral"
                 trade_logic = "Consolidating within structural boundaries."
 
-            # ========================================================
-            # STRICT INSTITUTIONAL 1:2 MINIMUM RISK-REWARD ENGINE
-            # ========================================================
-            sl_dist = 1.0 * atr  # Disciplined Risk Unit
+            # STRICT 1:2 RISK REWARD RATIO
+            sl_dist = 1.0 * atr
             if "SELL" in signal:
                 sl = c_close + sl_dist
-                target_1 = c_close - (2.0 * sl_dist)  # MINIMUM 1:2 PROFIT RATIO
-                target_2 = c_close - (3.5 * sl_dist)  # 1:3.5 EXTENDED RUNNER
+                target_1 = c_close - (2.0 * sl_dist)
+                target_2 = c_close - (3.5 * sl_dist)
             else:
                 sl = c_close - sl_dist
-                target_1 = c_close + (2.0 * sl_dist)  # MINIMUM 1:2 PROFIT RATIO
-                target_2 = c_close + (3.5 * sl_dist)  # 1:3.5 EXTENDED RUNNER
+                target_1 = c_close + (2.0 * sl_dist)
+                target_2 = c_close + (3.5 * sl_dist)
 
             risk_per_unit = max(abs(c_close - sl), 0.0001)
             units_by_risk = int(risk_per_trade / risk_per_unit)
@@ -613,27 +506,26 @@ def get_live_candle_data(asset_name):
     return None, None, None
 
 # -------------------------------------------------------------
-# 10. SWING MONITOR (DUAL TOUCH CONFIRMATION)
+# 10. SWING MONITOR (AUTO-UPDATE GOOGLE SHEET ON TP/SL)
 # -------------------------------------------------------------
-needs_rerun = False
+sheet_modified = False
 
 for trade in all_trades:
-    if trade.get("status") == "OPEN":
+    if str(trade.get("status", "")).upper() == "OPEN":
         t_id = trade.get("id")
         a_name = trade.get("asset")
         c_ltp, c_high, c_low = get_live_candle_data(a_name)
         
         if c_ltp is None:
-            c_ltp = float(trade.get("entry"))
+            c_ltp = float(trade.get("entry", 0.0))
             c_high = c_ltp
             c_low = c_ltp
 
-        e_price = float(trade.get("entry"))
-        s_price = float(trade.get("sl"))
-        t_price = float(trade.get("tp1"))
-        q = int(trade.get("qty"))
-        side_type = trade.get("type")
-        inv_fund = float(trade.get("invested_capital", e_price * q))
+        e_price = float(trade.get("entry", 0.0))
+        s_price = float(trade.get("sl", 0.0))
+        t_price = float(trade.get("tp1", 0.0))
+        q = int(trade.get("qty", 1))
+        side_type = str(trade.get("type", "BUY")).upper()
 
         if side_type == "BUY":
             tp_hit = (c_high >= t_price) or (c_ltp >= t_price)
@@ -648,24 +540,29 @@ for trade in all_trades:
             exit_time_val = ist_now.strftime("%Y-%m-%d %H:%M")
             pnl_realized = (exit_price_val - e_price) * q if side_type == "BUY" else (e_price - exit_price_val) * q
 
-            db_close_trade(t_id, exit_price_val, exit_time_val, pnl_realized, status_val)
-            new_bal = available_balance + inv_fund + pnl_realized
-            db_update_portfolio(balance=new_bal)
-            needs_rerun = True
+            idx_list = sheet_trades_df.index[sheet_trades_df["id"] == t_id].tolist()
+            if idx_list:
+                row_idx = idx_list[0]
+                sheet_trades_df.at[row_idx, "status"] = status_val
+                sheet_trades_df.at[row_idx, "exit_price"] = exit_price_val
+                sheet_trades_df.at[row_idx, "exit_time"] = exit_time_val
+                sheet_trades_df.at[row_idx, "pnl"] = pnl_realized
+                sheet_modified = True
 
-if needs_rerun:
+if sheet_modified:
+    save_sheet_trades(sheet_trades_df)
     st.rerun()
 
 # -------------------------------------------------------------
-# 11. EOD REPORT & TELEGRAM DISPATCH
+# 11. EOD PERFORMANCE DESK
 # -------------------------------------------------------------
 today_trades = [t for t in all_trades if str(t.get("date", "")).startswith(today_date_str)]
-today_closed = [t for t in today_trades if t.get("status") != "OPEN"]
+today_closed = [t for t in today_trades if str(t.get("status", "")).upper() != "OPEN"]
 
 tot_alerts_today = len(today_trades)
-tp_hits_today = len([t for t in today_closed if "TARGET_HIT" in str(t.get("status"))])
-sl_hits_today = len([t for t in today_closed if t.get("status") == "SL_HIT"])
-today_pnl = sum([float(t.get("pnl", 0.0)) for t in today_closed])
+tp_hits_today = len([t for t in today_closed if "TARGET_HIT" in str(t.get("status", ""))])
+sl_hits_today = len([t for t in today_closed if str(t.get("status", "")).upper() == "SL_HIT"])
+today_pnl = sum([float(t.get("pnl", 0.0) or 0.0) for t in today_closed])
 win_rate = (tp_hits_today / len(today_closed) * 100) if today_closed else 0.0
 
 def build_eod_message():
@@ -681,21 +578,14 @@ def build_eod_message():
         f"💼 Available Cash: <b>₹{available_balance:,.2f}</b>\n"
         f"🔒 Locked Margin: <b>₹{blocked_capital:,.2f}</b>\n"
         f"⚡ Total Portfolio Equity: <b>₹{total_portfolio_equity:,.2f}</b>\n\n"
-        f"💡 Framework: Zero-Leak Institutional Swing Engine."
+        f"☁️ Sync: Google Sheets Permanent Ledger Active."
     )
-
-if ist_now.hour >= 18 and (ist_now.hour > 18 or ist_now.minute >= 30):
-    last_sent = db_get_eod_flag()
-    if last_sent != today_date_str:
-        sent, _ = send_telegram_msg(build_eod_message())
-        if sent:
-            db_set_eod_flag(today_date_str)
 
 # -------------------------------------------------------------
 # 12. VIRTUAL SWING PORTFOLIO DESK
 # -------------------------------------------------------------
-st.markdown("### 💼 Virtual Swing Portfolio (Persistent Desk)")
-total_lifetime_pnl = total_portfolio_equity - 10000.0
+st.markdown("### 💼 Virtual Swing Portfolio (Google Sheet Persistent Desk)")
+total_lifetime_pnl = total_portfolio_equity - INITIAL_BASE_CAPITAL
 
 p1, p2, p3, p4 = st.columns([1.5, 1.5, 1.5, 1.2])
 with p1:
@@ -706,9 +596,10 @@ with p3:
     st.metric("Total Equity & P&L", f"₹{total_portfolio_equity:,.2f}", delta=f"₹{total_lifetime_pnl:+,.2f}")
 with p4:
     st.write("")
-    if st.button("🔄 Reset to ₹10k"):
-        db_reset()
-        st.success("Database and portfolio reset to ₹10,000!")
+    if st.button("🔄 Reset Portfolio"):
+        empty_df = pd.DataFrame(columns=SHEET_COLUMNS)
+        save_sheet_trades(empty_df)
+        st.success("Google Sheet Cleared & Portfolio Reset to ₹10,000!")
         st.rerun()
 
 with st.expander("📊 Today's Performance Report & Telegram Dispatch", expanded=False):
@@ -725,24 +616,23 @@ with st.expander("📊 Today's Performance Report & Telegram Dispatch", expanded
     if st.button("📤 Send EOD Report to Telegram Now"):
         ok, res_txt = send_telegram_msg(build_eod_message())
         if ok:
-            db_set_eod_flag(today_date_str)
             st.success("✅ EOD Report Telegram par deliver ho gayi!")
         else:
             st.error(f"❌ Telegram Error: {res_txt}")
 
 # Active Running Swing Positions
 if open_trades:
-    st.markdown("#### ⚡ Active Open Swing Positions (Preserved Across Days)")
+    st.markdown("#### ⚡ Active Open Swing Positions (Synced with Google Sheets)")
     for idx, trade in enumerate(open_trades):
         t_id = trade.get("id")
         asset_name = trade.get('asset')
         c_ltp, _, _ = get_live_candle_data(asset_name)
-        current_ltp = c_ltp or float(trade.get('entry'))
-        entry_price = float(trade.get('entry'))
-        qty = int(trade.get('qty'))
-        t_type = trade.get('type')
-        sl_price = float(trade.get('sl'))
-        tp1_price = float(trade.get('tp1'))
+        current_ltp = c_ltp or float(trade.get('entry', 0.0))
+        entry_price = float(trade.get('entry', 0.0))
+        qty = int(trade.get('qty', 1))
+        t_type = str(trade.get('type', "BUY")).upper()
+        sl_price = float(trade.get('sl', 0.0))
+        tp1_price = float(trade.get('tp1', 0.0))
         inv_amount = float(trade.get("invested_capital", entry_price * qty))
 
         is_fx = any(fx in str(asset_name).upper() for fx in ["USD", "EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "NZD", "BTC", "ETH", "SOL", "XAU", "XAG", "GOLD", "SILVER"])
@@ -780,10 +670,16 @@ if open_trades:
         with col_sq2:
             if st.button(f"🔴 Exit #{idx+1}", key=f"exit_pos_{t_id}"):
                 pnl_realized = (current_ltp - entry_price) * qty if t_type == "BUY" else (entry_price - current_ltp) * qty
-                db_close_trade(t_id, current_ltp, ist_now.strftime("%Y-%m-%d %H:%M"), pnl_realized, "MANUAL_EXIT")
-                db_update_portfolio(balance=available_balance + inv_amount + pnl_realized)
-                st.success("Trade closed & cash released!")
-                st.rerun()
+                idx_list = sheet_trades_df.index[sheet_trades_df["id"] == t_id].tolist()
+                if idx_list:
+                    row_idx = idx_list[0]
+                    sheet_trades_df.at[row_idx, "status"] = "MANUAL_EXIT"
+                    sheet_trades_df.at[row_idx, "exit_price"] = current_ltp
+                    sheet_trades_df.at[row_idx, "exit_time"] = ist_now.strftime("%Y-%m-%d %H:%M")
+                    sheet_trades_df.at[row_idx, "pnl"] = pnl_realized
+                    save_sheet_trades(sheet_trades_df)
+                    st.success("Position closed and saved to Google Sheets!")
+                    st.rerun()
 
 # -------------------------------------------------------------
 # 13. METRICS & MONITORING TABLE
@@ -866,7 +762,9 @@ with btn_col1:
         if required_fund > available_balance:
             st.error(f"❌ **Trade Rejected!** Balance ₹{available_balance:,.2f} is less than required ₹{required_fund:,.2f}.")
         else:
-            new_trade = {
+            new_id = int(sheet_trades_df["id"].max() + 1) if not sheet_trades_df.empty and pd.notnull(sheet_trades_df["id"].max()) else 1
+            new_row = pd.DataFrame([{
+                "id": new_id,
                 "date": ist_now.strftime("%Y-%m-%d %H:%M"),
                 "asset": chosen_asset,
                 "type": side,
@@ -877,11 +775,14 @@ with btn_col1:
                 "qty": qty_input,
                 "invested_capital": required_fund,
                 "status": "OPEN",
-                "timeframe": swing_tf
-            }
-            db_insert_trade(new_trade)
-            db_update_portfolio(balance=available_balance - required_fund)
-            st.success(f"✅ ₹{required_fund:,.2f} locked in database for {chosen_asset}! 1:2 R:R Trade preserved.")
+                "timeframe": swing_tf,
+                "exit_price": 0.0,
+                "exit_time": "",
+                "pnl": 0.0
+            }])
+            updated_df = pd.concat([sheet_trades_df, new_row], ignore_index=True)
+            save_sheet_trades(updated_df)
+            st.success(f"✅ Trade #{new_id} permanently saved in Google Sheet!")
             st.rerun()
 
 with btn_col2:
@@ -910,7 +811,7 @@ with btn_col2:
 # 15. COMPLETED TRADE HISTORY LEDGER
 # -------------------------------------------------------------
 if closed_trades:
-    with st.expander("📜 Completed Paper Trades Ledger", expanded=False):
+    with st.expander("📜 Completed Paper Trades Ledger (From Google Sheets)", expanded=False):
         history_df = pd.DataFrame(closed_trades)[["id", "date", "asset", "type", "entry", "exit_price", "qty", "pnl", "status", "exit_time"]]
         st.dataframe(history_df, use_container_width=True, hide_index=True)
 
