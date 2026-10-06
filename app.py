@@ -12,7 +12,7 @@ from datetime import datetime, timezone, timedelta
 from streamlit_gsheets import GSheetsConnection
 
 # -------------------------------------------------------------
-# 1. PAGE SETUP & THEME
+# 1. PAGE SETUP & CONFIG
 # -------------------------------------------------------------
 st.set_page_config(
     page_title="SAHI Pro Trading Terminal",
@@ -36,7 +36,7 @@ ANGEL_MPIN = get_secret("ANGEL_MPIN")
 ANGEL_TOTP_KEY = get_secret("ANGEL_TOTP_KEY")
 
 # -------------------------------------------------------------
-# 2. GOOGLE SHEETS CLOUD STORAGE (PERSISTENT DESK)
+# 2. GOOGLE SHEETS CLOUD STORAGE (NEVER RESETS)
 # -------------------------------------------------------------
 @st.cache_resource
 def get_sheets_connection():
@@ -115,7 +115,7 @@ def get_smartapi_session():
 def place_order_smartapi(symbol_token, trading_symbol, exchange, qty, transaction_type, price=0):
     api = get_smartapi_session()
     if not api:
-        return False, "SmartAPI session unavailable."
+        return False, "SmartAPI credentials missing or session uninitialized."
     try:
         prod_type = "DELIVERY" if exchange == "NSE" else "CARRYFORWARD"
         order_params = {
@@ -132,13 +132,13 @@ def place_order_smartapi(symbol_token, trading_symbol, exchange, qty, transactio
         }
         res = api.placeOrder(order_params)
         if res.get("status"):
-            return True, f"Executed! Order ID: {res.get('data', {}).get('orderid')}"
-        return False, res.get("message", "Order rejected.")
+            return True, f"Real Swing Order Placed! ID: {res.get('data', {}).get('orderid')}"
+        return False, res.get("message", "Order rejected by broker.")
     except Exception as e:
         return False, str(e)
 
 # -------------------------------------------------------------
-# 5. ASSET UNIVERSE & MAPS
+# 5. ALL ORIGINAL MARKETS & ASSET UNIVERSES (80+ STOCKS)
 # -------------------------------------------------------------
 NSE_EQUITIES = [
     "^NSEI", "^NSEBANK",
@@ -202,7 +202,7 @@ def calculate_vwap(df):
     return (typical_price * vol).cumsum() / vol.cumsum()
 
 # -------------------------------------------------------------
-# 6. HEADER & MARKET ACTIVITY
+# 6. HEADER & MARKET SELECTION
 # -------------------------------------------------------------
 st.title("⚡ SAHI Pro Trading Terminal")
 
@@ -220,9 +220,34 @@ is_nse_time = (ist_now.weekday() < 5) and (555 <= cur_mins <= 930)
 is_nse_active = verify_nse_active() if is_nse_time else False
 session_text = "🟢 NSE LIVE ACTIVE" if is_nse_active else "🔴 NSE CLOSED / HOLIDAY"
 
-st.caption(f"Status: **{session_text}** | Live Time: **{time_str}** | Model: **Single-Screen Fast Execution Desk**")
+st.caption(f"Status: **{session_text}** | Live Time: **{time_str}** | Model: **Single-Screen Desk + 1:2 R:R Formula**")
 
-# Data loading
+# Market Universes Dropdown Selector
+col_mkt, col_tf, col_mode = st.columns([1.8, 1.2, 1.2])
+
+all_market_keys = list(MARKET_UNIVERSES.keys())
+default_index = 0
+if not is_nse_active:
+    if 930 < cur_mins <= 1290:
+        default_index = 1  # Forex & Commodities
+    elif cur_mins > 1290 or cur_mins <= 90:
+        default_index = 2  # US Equities
+    else:
+        default_index = 3  # Crypto
+
+with col_mkt:
+    selected_universe = st.selectbox("🌐 Asset Universe:", all_market_keys, index=default_index)
+
+with col_tf:
+    swing_tf = st.selectbox("⏱️ Timeframe:", ["1h (1 Hour)", "4h (4 Hours)", "1d (Daily)"], index=0)
+
+with col_mode:
+    selected_mode = st.selectbox("👤 Profile Mode:", ["Beginner (Safe)", "Pro Trader (Full)"], index=1)
+
+is_beginner = (selected_mode == "Beginner (Safe)")
+tickers = MARKET_UNIVERSES[selected_universe]
+
+# Data loading from Google Sheet
 sheet_trades_df = load_sheet_trades()
 all_trades = sheet_trades_df.to_dict(orient="records") if not sheet_trades_df.empty else []
 open_trades = [t for t in all_trades if str(t.get("status", "")).upper() == "OPEN"]
@@ -258,7 +283,7 @@ def get_live_candle_data(asset_name):
     return None, None, None
 
 # -------------------------------------------------------------
-# 7. REAL-TIME TARGET & SL MONITOR
+# 7. REAL-TIME TARGET (1:2) & SL AUTO-MONITOR
 # -------------------------------------------------------------
 sheet_modified = False
 for trade in all_trades:
@@ -301,29 +326,39 @@ if sheet_modified:
     st.rerun()
 
 # -------------------------------------------------------------
-# 8. SCANNER ENGINE (BREAKOUTS + VOLUME SHOCKERS + 52W HIGH)
+# 8. SCANNER FOR ACTIVE UNIVERSE
 # -------------------------------------------------------------
-selected_universe = "Indian Equities & Indices (NSE)" if is_nse_active else "Forex & Commodities"
-tickers = MARKET_UNIVERSES[selected_universe]
+tf_map = {
+    "1h (1 Hour)": {"interval": "1h", "period": "1mo", "tv": "60"},
+    "4h (4 Hours)": {"interval": "1h", "period": "3mo", "tv": "240"},
+    "1d (Daily)": {"interval": "1d", "period": "6mo", "tv": "D"}
+}
+curr_tf_conf = tf_map[swing_tf]
 
 @st.cache_data(ttl=180)
-def fetch_market_data_universe(ticker_list):
+def fetch_universe_feed(ticker_list, interval, period):
     try:
-        return yf.download(ticker_list, period="1y", interval="1d", group_by='ticker', progress=False)
+        return yf.download(ticker_list, period=period, interval=interval, group_by='ticker', progress=False)
     except Exception:
         return None
 
-raw_daily = fetch_market_data_universe(tickers)
+raw_feed = fetch_universe_feed(tickers, curr_tf_conf["interval"], curr_tf_conf["period"])
 breakout_records = []
 volume_shockers = []
 high_52w_records = []
 
-if raw_daily is not None:
+if raw_feed is not None:
     for ticker in tickers:
         try:
-            df = raw_daily[ticker] if len(tickers) > 1 else raw_daily
+            df = raw_feed[ticker] if len(tickers) > 1 else raw_feed
             df = df.dropna()
-            if len(df) < 50:
+
+            if "4h" in swing_tf and len(df) >= 8:
+                df = df.resample('4h').agg({
+                    'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'
+                }).dropna()
+
+            if len(df) < 20:
                 continue
 
             c_close = float(df['Close'].iloc[-1])
@@ -345,35 +380,39 @@ if raw_daily is not None:
             rsi_s = ta.momentum.rsi(df['Close'], window=14)
             rsi = float(rsi_s.dropna().iloc[-1]) if not rsi_s.dropna().empty else 50.0
 
-            high_52w = float(df['High'].max())
-            low_52w = float(df['Low'].min())
-            clean_name = NAME_MAP.get(ticker, ticker.replace(".NS", "").replace("^", "").replace("-USD", ""))
+            ema20 = float(ta.trend.ema_indicator(df['Close'], window=20).dropna().iloc[-1])
+            ema50 = float(ta.trend.ema_indicator(df['Close'], window=50).dropna().iloc[-1])
 
-            # 1. Volume Shockers (SAHI Feature)
-            if rvol >= 1.8 and c_close > c_vwap and ("=" not in ticker and "^" not in ticker):
+            high_52w = float(df['High'].max())
+            clean_name = NAME_MAP.get(ticker, ticker.replace(".NS", "").replace("^", "").replace("-USD", ""))
+            is_special = any(sp in ticker for sp in ["=", "^", "USD"])
+            dec = 4 if is_special else 2
+
+            # 1. Volume Shockers Radar
+            if rvol >= 1.8 and c_close > c_vwap and not is_special:
                 volume_shockers.append({
-                    "Asset": clean_name, "LTP": c_close, "RVol": f"{rvol}x",
-                    "RSI": round(rsi, 1), "VWAP": round(c_vwap, 2), "Volume": int(c_vol)
+                    "Asset": clean_name, "LTP": round(c_close, dec), "RVol": f"{rvol}x",
+                    "RSI": round(rsi, 1), "VWAP": round(c_vwap, dec), "Volume": int(c_vol)
                 })
 
-            # 2. 52-Week High Breakouts (SAHI Feature)
+            # 2. 52-Week High Breakouts
             if c_close >= (high_52w * 0.985):
                 high_52w_records.append({
-                    "Asset": clean_name, "LTP": c_close, "52W High": round(high_52w, 2),
+                    "Asset": clean_name, "LTP": round(c_close, dec), "52W High": round(high_52w, dec),
                     "Distance %": f"{round(((c_close - high_52w)/high_52w)*100, 2)}%", "RSI": round(rsi, 1)
                 })
 
-            # 3. Swing Breakouts (1:2 R:R)
-            is_breakout = (c_close > res_level) and (c_close > c_open) and (50 <= rsi <= 68)
-            is_breakdown = (c_close < sup_level) and (c_close < c_open) and (32 <= rsi <= 50)
+            # 3. Institutional 1:2 Swing Breakouts
+            is_breakout = (c_close > res_level) and (c_close > c_open) and (c_close > ema20) and (50 <= rsi <= 68)
+            is_breakdown = (c_close < sup_level) and (c_close < c_open) and (c_close < ema20) and (32 <= rsi <= 50)
 
             if is_breakout or is_breakdown:
                 sl_dist = 1.0 * atr
                 if is_breakout:
                     sig = "🟢 BUY BREAKOUT"
                     sl = c_close - sl_dist
-                    tp1 = c_close + (2.0 * sl_dist)
-                    tp2 = c_close + (3.5 * sl_dist)
+                    tp1 = c_close + (2.0 * sl_dist)   # STRICT 1:2 RATIO
+                    tp2 = c_close + (3.5 * sl_dist)   # 1:3.5 EXTENDED
                 else:
                     sig = "🔴 SELL BREAKDOWN"
                     sl = c_close + sl_dist
@@ -382,9 +421,9 @@ if raw_daily is not None:
 
                 breakout_records.append({
                     "Ticker": ticker, "Asset": clean_name, "Signal": sig,
-                    "LTP": round(c_close, 2), "Stop Loss": round(sl, 2),
-                    "Target 1 (1:2)": round(tp1, 2), "Target 2 (1:3.5)": round(tp2, 2),
-                    "RVol": f"{rvol}x", "RSI": round(rsi, 1)
+                    "LTP": round(c_close, dec), "Stop Loss": round(sl, dec),
+                    "Target 1 (1:2)": round(tp1, dec), "Target 2 (1:3.5)": round(tp2, dec),
+                    "RVol": "Liquid" if is_special else f"{rvol}x", "RSI": round(rsi, 1)
                 })
         except Exception:
             continue
@@ -411,6 +450,8 @@ with desk_left:
                 tv_symbol = "NSE:" + k.replace(".NS", "").replace("^", "")
             elif "=F" in k:
                 tv_symbol = "TVC:" + k.replace("=F", "")
+            elif "-USD" in k:
+                tv_symbol = "BINANCE:" + k.replace("-USD", "USDT")
             else:
                 tv_symbol = "NASDAQ:" + k
             break
@@ -463,7 +504,7 @@ with desk_right:
                     "status": "OPEN", "timeframe": tv_tf, "exit_price": 0.0, "exit_time": "", "pnl": 0.0
                 }])
                 save_sheet_trades(pd.concat([sheet_trades_df, row], ignore_index=True))
-                st.success("Buy Filled!")
+                st.success("Buy Filled & Saved to Google Sheet!")
                 st.rerun()
 
     with col_btn2:
@@ -480,11 +521,11 @@ with desk_right:
                     "status": "OPEN", "timeframe": tv_tf, "exit_price": 0.0, "exit_time": "", "pnl": 0.0
                 }])
                 save_sheet_trades(pd.concat([sheet_trades_df, row], ignore_index=True))
-                st.success("Sell Filled!")
+                st.success("Sell Filled & Saved to Google Sheet!")
                 st.rerun()
 
     st.markdown("---")
-    st.markdown("##### 💼 Live Active Positions")
+    st.markdown("##### 💼 Live Running Positions")
     if open_trades:
         for idx, tr in enumerate(open_trades):
             c_val, _, _ = get_live_candle_data(tr.get('asset'))
@@ -563,16 +604,16 @@ with tab_shock:
     if volume_shockers:
         st.dataframe(pd.DataFrame(volume_shockers), use_container_width=True, hide_index=True)
     else:
-        st.info("No volume spikes $\ge 1.8x$ detected on active tickers right now.")
+        st.info(f"No volume shockers $\ge 1.8x$ detected in {selected_universe} right now.")
 
 with tab_52w:
     if high_52w_records:
         st.dataframe(pd.DataFrame(high_52w_records), use_container_width=True, hide_index=True)
     else:
-        st.info("No stocks currently hovering within 1.5% of 52-week structural highs.")
+        st.info(f"No assets within 1.5% of 52-week structural highs in {selected_universe}.")
 
 with tab_swings:
     if breakout_records:
         st.dataframe(pd.DataFrame(breakout_records), use_container_width=True, hide_index=True)
     else:
-        st.info("Scanning for strict 1:2 Risk-Reward setups. No fresh triggers on this bar.")
+        st.info(f"Scanning {selected_universe} on {swing_tf}. No setups matching strict 1:2 parameters at this moment.")
