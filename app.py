@@ -12,7 +12,7 @@ from datetime import datetime, timezone, timedelta
 from streamlit_gsheets import GSheetsConnection
 
 # -------------------------------------------------------------
-# 1. PAGE SETUP & CONFIG
+# 1. PAGE SETUP & THEME
 # -------------------------------------------------------------
 st.set_page_config(
     page_title="SAHI Pro Trading Terminal",
@@ -115,7 +115,7 @@ def get_smartapi_session():
 def place_order_smartapi(symbol_token, trading_symbol, exchange, qty, transaction_type, price=0):
     api = get_smartapi_session()
     if not api:
-        return False, "SmartAPI credentials missing or session uninitialized."
+        return False, "SmartAPI session unavailable."
     try:
         prod_type = "DELIVERY" if exchange == "NSE" else "CARRYFORWARD"
         order_params = {
@@ -138,7 +138,7 @@ def place_order_smartapi(symbol_token, trading_symbol, exchange, qty, transactio
         return False, str(e)
 
 # -------------------------------------------------------------
-# 5. ALL ORIGINAL MARKETS & ASSET UNIVERSES (80+ STOCKS)
+# 5. ALL ASSETS UNIVERSE & MAPS
 # -------------------------------------------------------------
 NSE_EQUITIES = [
     "^NSEI", "^NSEBANK",
@@ -168,7 +168,7 @@ COMMODITIES_AND_FOREX = [
 ]
 
 US_EQUITIES = [
-    "GOOGL", "NVDA", "TSLA", "AAPL", "MSFT", "AMZN", "META", "AMD", "NFLX", "PLTR",
+    "AMZN", "GOOGL", "NVDA", "TSLA", "AAPL", "MSFT", "META", "AMD", "NFLX", "PLTR",
     "AVGO", "SMCI", "ARM", "QCOM", "INTC", "MU", "PANW", "CRWD", "COIN", "MSTR"
 ]
 
@@ -178,9 +178,9 @@ CRYPTO_ASSETS = [
 ]
 
 MARKET_UNIVERSES = {
+    "US Equities (NASDAQ/NYSE)": US_EQUITIES,
     "Indian Equities & Indices (NSE)": NSE_EQUITIES,
     "Forex & Commodities": COMMODITIES_AND_FOREX,
-    "US Equities (NASDAQ/NYSE)": US_EQUITIES,
     "Crypto (24x7)": CRYPTO_ASSETS
 }
 
@@ -196,13 +196,15 @@ NAME_MAP = {
     "AAPL": "APPLE", "MSFT": "MICROSOFT", "AMZN": "AMAZON", "META": "META"
 }
 
+REVERSE_MAP = {v: k for k, v in NAME_MAP.items()}
+
 def calculate_vwap(df):
     typical_price = (df['High'] + df['Low'] + df['Close']) / 3
     vol = df['Volume'].replace(0, 1)
     return (typical_price * vol).cumsum() / vol.cumsum()
 
 # -------------------------------------------------------------
-# 6. HEADER & MARKET SELECTION
+# 6. HEADER & TIME CONTROLS
 # -------------------------------------------------------------
 st.title("⚡ SAHI Pro Trading Terminal")
 
@@ -218,22 +220,22 @@ def verify_nse_active():
 
 is_nse_time = (ist_now.weekday() < 5) and (555 <= cur_mins <= 930)
 is_nse_active = verify_nse_active() if is_nse_time else False
-session_text = "🟢 NSE LIVE ACTIVE" if is_nse_active else "🔴 NSE CLOSED / HOLIDAY"
+session_text = "🟢 NSE LIVE ACTIVE" if is_nse_active else "🔴 NSE CLOSED / US & GLOBAL ACTIVE"
 
-st.caption(f"Status: **{session_text}** | Live Time: **{time_str}** | Model: **Single-Screen Desk + 1:2 R:R Formula**")
+st.caption(f"Status: **{session_text}** | Live Time: **{time_str}** | Features: **Auto SL/TP + 1-Click Desk**")
 
-# Market Universes Dropdown Selector
 col_mkt, col_tf, col_mode = st.columns([1.8, 1.2, 1.2])
 
 all_market_keys = list(MARKET_UNIVERSES.keys())
 default_index = 0
-if not is_nse_active:
-    if 930 < cur_mins <= 1290:
-        default_index = 1  # Forex & Commodities
-    elif cur_mins > 1290 or cur_mins <= 90:
-        default_index = 2  # US Equities
-    else:
-        default_index = 3  # Crypto
+if is_nse_active:
+    default_index = all_market_keys.index("Indian Equities & Indices (NSE)")
+elif 930 < cur_mins <= 1290:
+    default_index = all_market_keys.index("Forex & Commodities")
+elif (cur_mins > 1290) or (cur_mins <= 90):
+    default_index = all_market_keys.index("US Equities (NASDAQ/NYSE)")
+else:
+    default_index = all_market_keys.index("Crypto (24x7)")
 
 with col_mkt:
     selected_universe = st.selectbox("🌐 Asset Universe:", all_market_keys, index=default_index)
@@ -247,7 +249,7 @@ with col_mode:
 is_beginner = (selected_mode == "Beginner (Safe)")
 tickers = MARKET_UNIVERSES[selected_universe]
 
-# Data loading from Google Sheet
+# Data Loading from Google Sheets
 sheet_trades_df = load_sheet_trades()
 all_trades = sheet_trades_df.to_dict(orient="records") if not sheet_trades_df.empty else []
 open_trades = [t for t in all_trades if str(t.get("status", "")).upper() == "OPEN"]
@@ -259,38 +261,36 @@ realized_closed_pnl = sum([float(t.get("pnl", 0.0) or 0.0) for t in closed_trade
 available_balance = INITIAL_BASE_CAPITAL + realized_closed_pnl - blocked_capital
 total_portfolio_equity = available_balance + blocked_capital
 
+# Live Candle / LTP Fetching Engine (Zero-Fail)
 def get_live_candle_data(asset_name):
-    for t, mapped in NAME_MAP.items():
-        if mapped == asset_name or t == asset_name:
-            try:
-                t_df = yf.download(t, period="2d", interval="1h", progress=False)
-                if not t_df.empty:
-                    return float(t_df['Close'].dropna().iloc[-1]), float(t_df['High'].dropna().iloc[-1]), float(t_df['Low'].dropna().iloc[-1])
-            except Exception:
-                pass
-    try:
-        t_df = yf.download(f"{asset_name}.NS", period="2d", interval="1h", progress=False)
-        if not t_df.empty:
-            return float(t_df['Close'].dropna().iloc[-1]), float(t_df['High'].dropna().iloc[-1]), float(t_df['Low'].dropna().iloc[-1])
-    except Exception:
-        pass
-    try:
-        t_df = yf.download(asset_name, period="2d", interval="1h", progress=False)
-        if not t_df.empty:
-            return float(t_df['Close'].dropna().iloc[-1]), float(t_df['High'].dropna().iloc[-1]), float(t_df['Low'].dropna().iloc[-1])
-    except Exception:
-        pass
-    return None, None, None
+    query_ticker = REVERSE_MAP.get(asset_name, asset_name)
+    candidates = [query_ticker]
+    if not any(x in query_ticker for x in [".NS", "^", "=", "-USD"]):
+        candidates.extend([f"{query_ticker}.NS", query_ticker])
+
+    for sym in candidates:
+        try:
+            t_df = yf.download(sym, period="5d", interval="1h", progress=False)
+            if not t_df.empty:
+                c = float(t_df['Close'].dropna().iloc[-1])
+                h = float(t_df['High'].dropna().iloc[-1])
+                l = float(t_df['Low'].dropna().iloc[-1])
+                atr_s = ta.volatility.average_true_range(t_df['High'], t_df['Low'], t_df['Close'], window=14)
+                atr_val = float(atr_s.dropna().iloc[-1]) if not atr_s.dropna().empty else (c * 0.015)
+                return c, h, l, atr_val
+        except Exception:
+            continue
+    return None, None, None, None
 
 # -------------------------------------------------------------
-# 7. REAL-TIME TARGET (1:2) & SL AUTO-MONITOR
+# 7. REAL-TIME TARGET & SL AUTO-MONITOR
 # -------------------------------------------------------------
 sheet_modified = False
 for trade in all_trades:
     if str(trade.get("status", "")).upper() == "OPEN":
         t_id = trade.get("id")
         a_name = trade.get("asset")
-        c_ltp, c_high, c_low = get_live_candle_data(a_name)
+        c_ltp, c_high, c_low, _ = get_live_candle_data(a_name)
         if c_ltp is None:
             c_ltp = float(trade.get("entry", 0.0))
             c_high, c_low = c_ltp, c_ltp
@@ -375,20 +375,18 @@ if raw_feed is not None:
             c_vwap = float(df['VWAP'].iloc[-1])
 
             atr_s = ta.volatility.average_true_range(df['High'], df['Low'], df['Close'], window=14)
-            atr = float(atr_s.dropna().iloc[-1]) if not atr_s.dropna().empty else (c_close * 0.01)
+            atr = float(atr_s.dropna().iloc[-1]) if not atr_s.dropna().empty else (c_close * 0.015)
 
             rsi_s = ta.momentum.rsi(df['Close'], window=14)
             rsi = float(rsi_s.dropna().iloc[-1]) if not rsi_s.dropna().empty else 50.0
 
             ema20 = float(ta.trend.ema_indicator(df['Close'], window=20).dropna().iloc[-1])
-            ema50 = float(ta.trend.ema_indicator(df['Close'], window=50).dropna().iloc[-1])
-
             high_52w = float(df['High'].max())
             clean_name = NAME_MAP.get(ticker, ticker.replace(".NS", "").replace("^", "").replace("-USD", ""))
             is_special = any(sp in ticker for sp in ["=", "^", "USD"])
             dec = 4 if is_special else 2
 
-            # 1. Volume Shockers Radar
+            # 1. Volume Shockers
             if rvol >= 1.8 and c_close > c_vwap and not is_special:
                 volume_shockers.append({
                     "Asset": clean_name, "LTP": round(c_close, dec), "RVol": f"{rvol}x",
@@ -402,7 +400,7 @@ if raw_feed is not None:
                     "Distance %": f"{round(((c_close - high_52w)/high_52w)*100, 2)}%", "RSI": round(rsi, 1)
                 })
 
-            # 3. Institutional 1:2 Swing Breakouts
+            # 3. Institutional 1:2 Breakouts
             is_breakout = (c_close > res_level) and (c_close > c_open) and (c_close > ema20) and (50 <= rsi <= 68)
             is_breakdown = (c_close < sup_level) and (c_close < c_open) and (c_close < ema20) and (32 <= rsi <= 50)
 
@@ -411,8 +409,8 @@ if raw_feed is not None:
                 if is_breakout:
                     sig = "🟢 BUY BREAKOUT"
                     sl = c_close - sl_dist
-                    tp1 = c_close + (2.0 * sl_dist)   # STRICT 1:2 RATIO
-                    tp2 = c_close + (3.5 * sl_dist)   # 1:3.5 EXTENDED
+                    tp1 = c_close + (2.0 * sl_dist)
+                    tp2 = c_close + (3.5 * sl_dist)
                 else:
                     sig = "🔴 SELL BREAKDOWN"
                     sl = c_close + sl_dist
@@ -429,7 +427,7 @@ if raw_feed is not None:
             continue
 
 # -------------------------------------------------------------
-# 9. SINGLE-SCREEN TRADING DESK (CHART + EXECUTION SIDE-BY-SIDE)
+# 9. SINGLE-SCREEN TRADING DESK (CHART + AUTO SL/TP EXECUTION)
 # -------------------------------------------------------------
 st.markdown("### 🖥️ Single-Screen Trading Desk")
 desk_left, desk_right = st.columns([2.3, 1.2])
@@ -443,22 +441,21 @@ with desk_left:
     with chart_col2:
         tv_tf = st.selectbox("Interval:", ["1m", "5m", "15m", "60m", "D"], index=3)
 
-    tv_symbol = "NSE:" + active_chart_asset.replace(".NS", "")
-    for k, v in NAME_MAP.items():
-        if v == active_chart_asset:
-            if "^NSE" in k or ".NS" in k:
-                tv_symbol = "NSE:" + k.replace(".NS", "").replace("^", "")
-            elif "=F" in k:
-                tv_symbol = "TVC:" + k.replace("=F", "")
-            elif "-USD" in k:
-                tv_symbol = "BINANCE:" + k.replace("-USD", "USDT")
-            else:
-                tv_symbol = "NASDAQ:" + k
-            break
+    raw_t = REVERSE_MAP.get(active_chart_asset, active_chart_asset)
+    if "^NSE" in raw_t or ".NS" in raw_t:
+        tv_symbol = "NSE:" + raw_t.replace(".NS", "").replace("^", "")
+    elif "=F" in raw_t:
+        tv_symbol = "TVC:" + raw_t.replace("=F", "")
+    elif "-USD" in raw_t:
+        tv_symbol = "BINANCE:" + raw_t.replace("-USD", "USDT")
+    elif any(fx in raw_t for fx in ["=X"]):
+        tv_symbol = "FX:" + raw_t.replace("=X", "")
+    else:
+        tv_symbol = "NASDAQ:" + raw_t
 
     tv_html = f"""
-    <div class="tradingview-widget-container" style="height:520px; width:100%;">
-      <div id="tv_chart" style="height:520px;"></div>
+    <div class="tradingview-widget-container" style="height:530px; width:100%;">
+      <div id="tv_chart" style="height:530px;"></div>
       <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
       <script type="text/javascript">
       new TradingView.widget({{
@@ -478,16 +475,39 @@ with desk_left:
       </script>
     </div>
     """
-    components.html(tv_html, height=530)
+    components.html(tv_html, height=540)
 
 with desk_right:
     st.markdown("#### ⚡ 1-Click Fast Execution")
-    live_tuple = get_live_candle_data(active_chart_asset)
-    asset_ltp = live_tuple[0] or 100.0
+    
+    # 1. Fetch live market candle with ATR
+    c_live, _, _, atr_live = get_live_candle_data(active_chart_asset)
+    asset_ltp = c_live if c_live is not None else 100.0
+    atr_val = atr_live if atr_live is not None else (asset_ltp * 0.015)
 
-    st.metric(f"{active_chart_asset} LTP", f"₹{asset_ltp:,.2f}")
+    is_fx = any(fx in active_chart_asset for fx in ["USD", "EUR", "GBP", "JPY", "INR", "Gold", "Silver", "BITCOIN", "ETHEREUM"])
+    dec_fmt = "%.4f" if is_fx else "%.2f"
+    step_val = 0.0001 if is_fx else 0.05
+
+    # 2. Strict 1:2 R:R Auto Calculation
+    sl_dist = 1.0 * atr_val
+    auto_sl_buy = round(asset_ltp - sl_dist, 4 if is_fx else 2)
+    auto_tp_buy = round(asset_ltp + (2.0 * sl_dist), 4 if is_fx else 2)
+    auto_tp2_buy = round(asset_ltp + (3.5 * sl_dist), 4 if is_fx else 2)
+
+    st.metric(f"{active_chart_asset} Live Price", f"{dec_fmt % asset_ltp}")
+
     fast_qty = st.number_input("Lots / Qty:", min_value=1, value=1, step=1)
     req_fund = asset_ltp * fast_qty
+
+    # 3. Live Auto SL & Auto 1:2 Target Display Boxes
+    col_sl_b, col_tp_b = st.columns(2)
+    with col_sl_b:
+        exec_sl = st.number_input("Auto SL (1x ATR):", value=float(auto_sl_buy), step=step_val, format=dec_fmt)
+    with col_tp_b:
+        exec_tp = st.number_input("Auto Target (1:2):", value=float(auto_tp_buy), step=step_val, format=dec_fmt)
+
+    st.caption(f"🔒 Margin Req: ₹{req_fund:,.2f} | Balance: ₹{available_balance:,.2f}")
 
     col_btn1, col_btn2 = st.columns(2)
     with col_btn1:
@@ -499,12 +519,12 @@ with desk_right:
                 row = pd.DataFrame([{
                     "id": new_id, "date": ist_now.strftime("%Y-%m-%d %H:%M"),
                     "asset": active_chart_asset, "type": "BUY", "entry": asset_ltp,
-                    "sl": round(asset_ltp * 0.985, 2), "tp1": round(asset_ltp * 1.03, 2),
-                    "tp2": round(asset_ltp * 1.05, 2), "qty": fast_qty, "invested_capital": req_fund,
+                    "sl": exec_sl, "tp1": exec_tp, "tp2": auto_tp2_buy,
+                    "qty": fast_qty, "invested_capital": req_fund,
                     "status": "OPEN", "timeframe": tv_tf, "exit_price": 0.0, "exit_time": "", "pnl": 0.0
                 }])
                 save_sheet_trades(pd.concat([sheet_trades_df, row], ignore_index=True))
-                st.success("Buy Filled & Saved to Google Sheet!")
+                st.success("Buy Filled & Recorded in Google Sheet!")
                 st.rerun()
 
     with col_btn2:
@@ -512,23 +532,26 @@ with desk_right:
             if req_fund > available_balance:
                 st.error("Insufficient Balance!")
             else:
+                auto_sl_sell = round(asset_ltp + sl_dist, 4 if is_fx else 2)
+                auto_tp_sell = round(asset_ltp - (2.0 * sl_dist), 4 if is_fx else 2)
+                auto_tp2_sell = round(asset_ltp - (3.5 * sl_dist), 4 if is_fx else 2)
                 new_id = int(sheet_trades_df["id"].max() + 1) if not sheet_trades_df.empty and pd.notnull(sheet_trades_df["id"].max()) else 1
                 row = pd.DataFrame([{
                     "id": new_id, "date": ist_now.strftime("%Y-%m-%d %H:%M"),
                     "asset": active_chart_asset, "type": "SELL", "entry": asset_ltp,
-                    "sl": round(asset_ltp * 1.015, 2), "tp1": round(asset_ltp * 0.97, 2),
-                    "tp2": round(asset_ltp * 0.95, 2), "qty": fast_qty, "invested_capital": req_fund,
+                    "sl": auto_sl_sell, "tp1": auto_tp_sell, "tp2": auto_tp2_sell,
+                    "qty": fast_qty, "invested_capital": req_fund,
                     "status": "OPEN", "timeframe": tv_tf, "exit_price": 0.0, "exit_time": "", "pnl": 0.0
                 }])
                 save_sheet_trades(pd.concat([sheet_trades_df, row], ignore_index=True))
-                st.success("Sell Filled & Saved to Google Sheet!")
+                st.success("Sell Filled & Recorded in Google Sheet!")
                 st.rerun()
 
     st.markdown("---")
     st.markdown("##### 💼 Live Running Positions")
     if open_trades:
         for idx, tr in enumerate(open_trades):
-            c_val, _, _ = get_live_candle_data(tr.get('asset'))
+            c_val, _, _, _ = get_live_candle_data(tr.get('asset'))
             c_val = c_val or float(tr.get('entry'))
             e_val = float(tr.get('entry'))
             q_val = int(tr.get('qty'))
