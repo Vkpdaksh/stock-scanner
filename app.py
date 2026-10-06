@@ -176,7 +176,7 @@ def get_ist_now():
 
 def send_telegram_msg(msg_text):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        return False, "Telegram credentials are missing in st.secrets."
+        return False, "Telegram credentials missing in secrets."
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
         payload = {
@@ -215,7 +215,7 @@ def get_smartapi_session():
 def place_order_smartapi(symbol_token, trading_symbol, exchange, qty, transaction_type, price=0):
     api = get_smartapi_session()
     if not api:
-        return False, "SmartAPI credentials missing or failed to initialize session."
+        return False, "SmartAPI credentials missing or session uninitialized."
     try:
         prod_type = "DELIVERY" if exchange == "NSE" else "CARRYFORWARD"
         order_params = {
@@ -335,7 +335,7 @@ with col_tf:
 if saved_mode != selected_mode or saved_execution != execution_type:
     db_update_portfolio(mode=selected_mode, execution=execution_type)
 
-st.caption(f"Status: **{session_text}** | Live Time: **{time_str}** | Database: **Persistent SQLite Attached**")
+st.caption(f"Status: **{session_text}** | Live Time: **{time_str}** | Sizing: **Safe 1:1 Realistic Targets**")
 
 # -------------------------------------------------------------
 # 7. CAPITAL SIZING & RISK ALLOCATION DESK
@@ -375,7 +375,7 @@ else:
 st.markdown("---")
 
 # -------------------------------------------------------------
-# 8. MARKET SCANNER ENGINE
+# 8. MARKET SCANNER ENGINE (OPTIMIZED SWING LOGIC)
 # -------------------------------------------------------------
 available_universes = list(MARKET_UNIVERSES.keys())
 
@@ -446,33 +446,35 @@ if raw_data is not None:
             rvol = (c_vol / avg_vol) if avg_vol > 0 else 1.0
             rvol_display = "Liquid" if is_special else f"{round(rvol, 2)}x"
 
-            is_breakout = (c_close > res_level) and (c_close > c_open) and (c_close > ema20)
-            is_breakdown = (c_close < sup_level) and (c_close < c_open) and (c_close < ema20)
+            # Filter: Overbought (RSI > 68) trades ko avoid karein taaki trap na ho
+            is_breakout = (c_close > res_level) and (c_close > c_open) and (c_close > ema20) and (50 <= rsi <= 68)
+            is_breakdown = (c_close < sup_level) and (c_close < c_open) and (c_close < ema20) and (32 <= rsi <= 50)
 
             if is_breakout:
                 signal = "🟢 SWING BUY BREAKOUT"
                 active_breakouts += 1
-                trade_logic = f"Breakout above {res_level:.2f} with EMA20 support."
-                grade = "Grade A+ (Institutional)" if (rvol >= 1.5 or is_special) and (c_close > ema50) and (rsi >= 55) else "Grade A"
+                trade_logic = f"Fresh breakout above {res_level:.2f} with healthy RSI ({rsi:.1f})."
+                grade = "Grade A+ (Institutional)" if (rvol >= 1.5 or is_special) and (c_close > ema50) else "Grade A"
             elif is_breakdown:
                 signal = "🔴 SWING SELL BREAKDOWN"
                 active_breakouts += 1
-                trade_logic = f"Breakdown below {sup_level:.2f} with downward pressure."
-                grade = "Grade A+ (Institutional)" if (rvol >= 1.5 or is_special) and (c_close < ema50) and (rsi <= 45) else "Grade A"
+                trade_logic = f"Fresh breakdown below {sup_level:.2f}."
+                grade = "Grade A+ (Institutional)" if (rvol >= 1.5 or is_special) and (c_close < ema50) else "Grade A"
             else:
                 signal = "⚪ ACCUMULATION / RANGE"
                 grade = "Neutral"
                 trade_logic = "Oscillating within consolidation range."
 
-            sl_dist = 1.5 * atr
+            # OPTIMIZED 1:1 REALISTIC SWING TARGETS
+            sl_dist = 1.0 * atr  # Realistic Stop Loss
             if "SELL" in signal:
                 sl = c_close + sl_dist
-                target_1 = c_close - (1.5 * sl_dist)
-                target_2 = c_close - (3.0 * sl_dist)
+                target_1 = c_close - (1.0 * sl_dist)  # 1:1 Ratio (Pehla target asani se hit hota hai)
+                target_2 = c_close - (2.0 * sl_dist)  # 1:2 Extended
             else:
                 sl = c_close - sl_dist
-                target_1 = c_close + (1.5 * sl_dist)
-                target_2 = c_close + (3.0 * sl_dist)
+                target_1 = c_close + (1.0 * sl_dist)  # 1:1 Ratio
+                target_2 = c_close + (2.0 * sl_dist)  # 1:2 Extended
 
             risk_per_unit = max(abs(c_close - sl), 0.0001)
             units_by_risk = int(risk_per_trade / risk_per_unit)
@@ -498,8 +500,8 @@ if raw_data is not None:
                 "VWAP": round(c_vwap, decimals),
                 "Breakout_Level": round(res_level if "BUY" in signal else sup_level, decimals),
                 "Stop Loss": round(sl, decimals),
-                "Target 1 (1:1.5)": round(target_1, decimals),
-                "Target 2 (1:3)": round(target_2, decimals),
+                "Target 1 (1:1 Safe)": round(target_1, decimals),
+                "Target 2 (1:2 Ext)": round(target_2, decimals),
                 "RVol": rvol_display,
                 "RSI": round(rsi, 1),
                 "Recommended Size": size_str,
@@ -511,28 +513,31 @@ if raw_data is not None:
         except Exception:
             continue
 
-def get_live_price_for_asset(asset_name):
-    m = next((r for r in records if r["Asset"] == asset_name), None)
-    if m:
-        return m["LTP"]
+def get_live_candle_data(asset_name):
     for t, mapped in NAME_MAP.items():
         if mapped == asset_name or t == asset_name:
             try:
                 t_df = yf.download(t, period="2d", interval="1h", progress=False)
                 if not t_df.empty:
-                    return float(t_df['Close'].dropna().iloc[-1])
+                    c = float(t_df['Close'].dropna().iloc[-1])
+                    h = float(t_df['High'].dropna().iloc[-1])
+                    l = float(t_df['Low'].dropna().iloc[-1])
+                    return c, h, l
             except Exception:
                 pass
     try:
         t_df = yf.download(f"{asset_name}.NS", period="2d", interval="1h", progress=False)
         if not t_df.empty:
-            return float(t_df['Close'].dropna().iloc[-1])
+            c = float(t_df['Close'].dropna().iloc[-1])
+            h = float(t_df['High'].dropna().iloc[-1])
+            l = float(t_df['Low'].dropna().iloc[-1])
+            return c, h, l
     except Exception:
         pass
-    return None
+    return None, None, None
 
 # -------------------------------------------------------------
-# 9. SWING MONITOR & AUTOMATIC CAPITAL RELEASE
+# 9. SWING MONITOR (WITH HIGH/LOW TARGET TOUCH DETECTION)
 # -------------------------------------------------------------
 needs_rerun = False
 
@@ -540,7 +545,13 @@ for trade in all_trades:
     if trade.get("status") == "OPEN":
         t_id = trade.get("id")
         a_name = trade.get("asset")
-        c_ltp = get_live_price_for_asset(a_name) or trade.get("entry")
+        c_ltp, c_high, c_low = get_live_candle_data(a_name)
+        
+        if c_ltp is None:
+            c_ltp = float(trade.get("entry"))
+            c_high = c_ltp
+            c_low = c_ltp
+
         e_price = float(trade.get("entry"))
         s_price = float(trade.get("sl"))
         t_price = float(trade.get("tp1"))
@@ -548,15 +559,21 @@ for trade in all_trades:
         side_type = trade.get("type")
         inv_fund = float(trade.get("invested_capital", e_price * q))
 
-        sl_hit = (side_type == "BUY" and c_ltp <= s_price) or (side_type == "SELL" and c_ltp >= s_price)
-        tp_hit = (side_type == "BUY" and c_ltp >= t_price) or (side_type == "SELL" and c_ltp <= t_price)
+        # Check with Candle High/Low so targets aren't missed
+        if side_type == "BUY":
+            tp_hit = (c_high >= t_price) or (c_ltp >= t_price)
+            sl_hit = (c_low <= s_price) or (c_ltp <= s_price)
+        else:
+            tp_hit = (c_low <= t_price) or (c_ltp <= t_price)
+            sl_hit = (c_high >= s_price) or (c_ltp >= s_price)
 
         if sl_hit or tp_hit:
-            status_val = "SL_HIT" if sl_hit else "TARGET_HIT"
+            status_val = "TARGET_HIT" if tp_hit else "SL_HIT"
+            exit_price_val = t_price if tp_hit else s_price
             exit_time_val = ist_now.strftime("%Y-%m-%d %H:%M")
-            pnl_realized = (c_ltp - e_price) * q if side_type == "BUY" else (e_price - c_ltp) * q
+            pnl_realized = (exit_price_val - e_price) * q if side_type == "BUY" else (e_price - exit_price_val) * q
 
-            db_close_trade(t_id, c_ltp, exit_time_val, pnl_realized, status_val)
+            db_close_trade(t_id, exit_price_val, exit_time_val, pnl_realized, status_val)
             new_bal = available_balance + inv_fund + pnl_realized
             db_update_portfolio(balance=new_bal)
             needs_rerun = True
@@ -588,8 +605,7 @@ def build_eod_message():
         f"💵 Today's P&L: <b>₹{sign}{today_pnl:,.2f}</b>\n"
         f"💼 Available Cash: <b>₹{available_balance:,.2f}</b>\n"
         f"🔒 Locked Margin: <b>₹{blocked_capital:,.2f}</b>\n"
-        f"⚡ Total Portfolio Equity: <b>₹{total_portfolio_equity:,.2f}</b>\n\n"
-        f"💡 Risk Status: Clean Persistent Execution."
+        f"⚡ Total Portfolio Equity: <b>₹{total_portfolio_equity:,.2f}</b>"
     )
 
 if ist_now.hour >= 18 and (ist_now.hour > 18 or ist_now.minute >= 30):
@@ -600,7 +616,7 @@ if ist_now.hour >= 18 and (ist_now.hour > 18 or ist_now.minute >= 30):
             db_set_eod_flag(today_date_str)
 
 # -------------------------------------------------------------
-# 11. VIRTUAL SWING PORTFOLIO WITH PERSISTENCE
+# 11. VIRTUAL SWING PORTFOLIO WITH MARGIN LOCK DESK
 # -------------------------------------------------------------
 st.markdown("### 💼 Virtual Swing Portfolio (Persistent Desk)")
 total_lifetime_pnl = total_portfolio_equity - 10000.0
@@ -634,7 +650,7 @@ with st.expander("📊 Today's EOD Report & Telegram Dispatch", expanded=False):
         ok, res_txt = send_telegram_msg(build_eod_message())
         if ok:
             db_set_eod_flag(today_date_str)
-            st.success("✅ EOD Report Telegram par send ho gayi!")
+            st.success("✅ EOD Report Telegram par deliver ho gayi!")
         else:
             st.error(f"❌ Telegram Error: {res_txt}")
 
@@ -644,7 +660,8 @@ if open_trades:
     for idx, trade in enumerate(open_trades):
         t_id = trade.get("id")
         asset_name = trade.get('asset')
-        current_ltp = get_live_price_for_asset(asset_name) or float(trade.get('entry'))
+        c_ltp, _, _ = get_live_candle_data(asset_name)
+        current_ltp = c_ltp or float(trade.get('entry'))
         entry_price = float(trade.get('entry'))
         qty = int(trade.get('qty'))
         t_type = trade.get('type')
@@ -725,11 +742,12 @@ with ord_col1:
     chosen_asset = st.selectbox("Contract / Asset:", available_clean_names if available_clean_names else ["None"])
 
 selected_item = next((r for r in records if r["Asset"] == chosen_asset), None)
-live_val = get_live_price_for_asset(chosen_asset) or 100.0
+live_val_tuple = get_live_candle_data(chosen_asset)
+live_val = live_val_tuple[0] or 100.0
 
 default_ltp = selected_item["LTP"] if selected_item else live_val
 default_sl = selected_item["Stop Loss"] if selected_item else round(default_ltp * 0.98, 4 if ("=" in str(chosen_asset) or "USD" in str(chosen_asset)) else 2)
-default_tp = selected_item["Target 1 (1:1.5)"] if selected_item else round(default_ltp * 1.03, 4 if ("=" in str(chosen_asset) or "USD" in str(chosen_asset)) else 2)
+default_tp = selected_item["Target 1 (1:1 Safe)"] if selected_item else round(default_ltp * 1.02, 4 if ("=" in str(chosen_asset) or "USD" in str(chosen_asset)) else 2)
 
 is_forex_asset = any(fx in str(chosen_asset).upper() for fx in [
     "USD", "EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "NZD", "INR", "GOLD", "SILVER", "XAU", "XAG", "GAS"
@@ -779,7 +797,7 @@ with btn_col1:
                 "entry": custom_exec_price,
                 "sl": custom_sl,
                 "tp1": custom_tp,
-                "tp2": selected_item.get("Target 2 (1:3)", custom_tp) if selected_item else custom_tp,
+                "tp2": selected_item.get("Target 2 (1:2 Ext)", custom_tp) if selected_item else custom_tp,
                 "qty": qty_input,
                 "invested_capital": required_fund,
                 "status": "OPEN",
@@ -787,7 +805,7 @@ with btn_col1:
             }
             db_insert_trade(new_trade)
             db_update_portfolio(balance=available_balance - required_fund)
-            st.success(f"✅ ₹{required_fund:,.2f} locked in database for {chosen_asset}! Trade preserved for next day.")
+            st.success(f"✅ ₹{required_fund:,.2f} locked in database for {chosen_asset}! Preserved across days.")
             st.rerun()
 
 with btn_col2:
