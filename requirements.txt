@@ -6,3 +6,4 @@ ta
 pyotp
 smartapi-python
 st-gsheets-connection
+plotly
