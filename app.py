@@ -7,7 +7,6 @@ import pandas as pd
 import numpy as np
 import yfinance as yf
 import ta
-import plotly.graph_objects as go
 from datetime import datetime, timezone, timedelta
 from streamlit_gsheets import GSheetsConnection
 
@@ -36,7 +35,7 @@ ANGEL_MPIN = get_secret("ANGEL_MPIN")
 ANGEL_TOTP_KEY = get_secret("ANGEL_TOTP_KEY")
 
 # -------------------------------------------------------------
-# 2. GOOGLE SHEETS CLOUD STORAGE (NEVER WIPES OUT)
+# 2. GOOGLE SHEETS CLOUD STORAGE
 # -------------------------------------------------------------
 @st.cache_resource
 def get_sheets_connection():
@@ -81,7 +80,7 @@ time_str = ist_now.strftime("%I:%M:%S %p IST")
 cur_mins = ist_now.hour * 60 + ist_now.minute
 
 # -------------------------------------------------------------
-# 4. ROBUST TICKER MAPPINGS (ALL MARKETS)
+# 4. ROBUST TICKER MAPPINGS
 # -------------------------------------------------------------
 FOREX_MAP = {
     "AUD/USD": "AUDUSD=X", "EUR/USD": "EURUSD=X", "GBP/USD": "GBPUSD=X",
@@ -129,9 +128,8 @@ def resolve_ticker(asset_label):
 
 @st.cache_data(ttl=30)
 def fetch_chart_dataframe(ticker, tf_str):
-    interval_map = {"1m": "1m", "5m": "5m", "15m": "15m", "60m": "1h", "D": "1d"}
-    period_map = {"1m": "1d", "5m": "5d", "15m": "5d", "60m": "1mo", "D": "1y"}
-    
+    interval_map = {"5m": "5m", "15m": "15m", "60m": "1h", "D": "1d"}
+    period_map = {"5m": "5d", "15m": "5d", "60m": "1mo", "D": "1y"}
     inv = interval_map.get(tf_str, "1h")
     prd = period_map.get(tf_str, "1mo")
     try:
@@ -164,7 +162,6 @@ with col_mode:
 
 tickers_in_univ = MARKET_CATEGORIES[selected_universe]
 
-# Data Loading from Google Sheets
 sheet_trades_df = load_sheet_trades()
 all_trades = sheet_trades_df.to_dict(orient="records") if not sheet_trades_df.empty else []
 open_trades = [t for t in all_trades if str(t.get("status", "")).upper() == "OPEN"]
@@ -176,7 +173,7 @@ realized_closed_pnl = sum([float(t.get("pnl", 0.0) or 0.0) for t in closed_trade
 available_balance = INITIAL_BASE_CAPITAL + realized_closed_pnl - blocked_capital
 
 # -------------------------------------------------------------
-# 6. AUTO SL & TARGET MONITOR ENGINE
+# 6. AUTO SL & TARGET MONITOR
 # -------------------------------------------------------------
 sheet_modified = False
 for trade in all_trades:
@@ -222,7 +219,7 @@ if sheet_modified:
     st.rerun()
 
 # -------------------------------------------------------------
-# 7. SINGLE-SCREEN TRADING DESK (UNIVERSAL CANDLESTICK ENGINE)
+# 7. SINGLE-SCREEN TRADING DESK (NATIVE ZERO-CRASH ENGINE)
 # -------------------------------------------------------------
 st.markdown("### 🖥️ Single-Screen Trading Desk")
 desk_left, desk_right = st.columns([2.3, 1.2])
@@ -231,33 +228,13 @@ with desk_left:
     active_chart_asset = st.selectbox("Active Asset:", tickers_in_univ, index=0, key="screen_asset_sel")
     active_ticker = resolve_ticker(active_chart_asset)
     
-    # Universal Live Candlestick Generator
     df_chart = fetch_chart_dataframe(active_ticker, chart_interval)
     
     if not df_chart.empty:
-        fig = go.Figure(data=[go.Candlestick(
-            x=df_chart.index,
-            open=df_chart['Open'],
-            high=df_chart['High'],
-            low=df_chart['Low'],
-            close=df_chart['Close'],
-            name="Market Candle",
-            increasing_line_color='#26a69a',
-            decreasing_line_color='#ef5350'
-        )])
-
-        fig.update_layout(
-            template="plotly_dark",
-            height=510,
-            margin=dict(l=10, r=10, t=30, b=10),
-            xaxis_rangeslider_visible=False,
-            title=f"<b>{active_chart_asset}</b> ({active_ticker}) - Live {chart_interval} Candlestick Chart",
-            paper_bgcolor="#131722",
-            plot_bgcolor="#131722"
-        )
-        st.plotly_chart(fig, use_container_width=True)
+        st.markdown(f"**📈 {active_chart_asset} ({active_ticker}) - Live {chart_interval} Price Movement**")
+        st.line_chart(df_chart[['Close']], height=480, use_container_width=True)
     else:
-        st.warning(f"Fetching market data for {active_chart_asset}... Please wait or refresh.")
+        st.warning(f"Connecting feed for {active_chart_asset}... Please wait a moment.")
 
 with desk_right:
     st.markdown("#### ⚡ 1-Click Fast Execution")
@@ -275,7 +252,6 @@ with desk_right:
     step_val = 0.0001 if (is_fx and asset_ltp < 20) else 0.05
     curr_prefix = "$" if selected_universe == "US Equities (NASDAQ/NYSE)" else ("₹" if "NSE" in selected_universe else "")
 
-    # Strict 1:2 R:R Formula
     sl_dist = 1.0 * atr_val
     auto_sl_buy = round(asset_ltp - sl_dist, 4 if (is_fx and asset_ltp < 20) else 2)
     auto_tp_buy = round(asset_ltp + (2.0 * sl_dist), 4 if (is_fx and asset_ltp < 20) else 2)
@@ -309,7 +285,7 @@ with desk_right:
                     "status": "OPEN", "timeframe": chart_interval, "exit_price": 0.0, "exit_time": "", "pnl": 0.0
                 }])
                 save_sheet_trades(pd.concat([sheet_trades_df, row], ignore_index=True))
-                st.success("Buy Filled & Recorded in Google Sheet!")
+                st.success("Buy Filled & Saved to Google Sheet!")
                 st.rerun()
 
     with col_btn2:
