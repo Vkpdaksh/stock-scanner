@@ -900,4 +900,86 @@ with btn_col2:
 # -------------------------------------------------------------
 # 15. COMPLETED TRADE HISTORY LEDGER
 # -------------------------------------------------------------
-if
+if closed_trades:
+    with st.expander("📜 Completed Paper Trades Ledger", expanded=False):
+        history_df = pd.DataFrame(closed_trades)[["id", "date", "asset", "type", "entry", "exit_price", "qty", "pnl", "status", "exit_time"]]
+        st.dataframe(history_df, use_container_width=True, hide_index=True)
+
+# -------------------------------------------------------------
+# 16. TRADINGVIEW LIVE CHART
+# -------------------------------------------------------------
+st.markdown("### 📈 Interactive TradingView Live Chart")
+tv_symbol_map = {
+    "ALPHABET (GOOGLE)": "NASDAQ:GOOGL",
+    "NVIDIA": "NASDAQ:NVDA",
+    "TESLA": "NASDAQ:TSLA",
+    "APPLE": "NASDAQ:AAPL",
+    "MICROSOFT": "NASDAQ:MSFT",
+    "AMAZON": "NASDAQ:AMZN",
+    "META PLATFORMS": "NASDAQ:META",
+    "NIFTY 50": "NSE:NIFTY",
+    "BANK NIFTY": "NSE:BANKNIFTY",
+    "XAUUSD (Gold)": "TVC:GOLD",
+    "XAGUSD (Silver)": "TVC:SILVER",
+    "CRUDE OIL": "TVC:USOIL",
+    "COPPER": "COMEX:HG1!",
+    "NATURAL GAS": "NYMEX:NG1!",
+    "USD/INR": "FX_IDC:USDINR",
+    "EUR/USD": "FX:EURUSD",
+    "GBP/USD": "FX:GBPUSD",
+    "USD/JPY": "FX:USDJPY",
+    "AUD/USD": "FX:AUDUSD",
+    "USD/CAD": "FX:USDCAD",
+    "USD/CHF": "FX:USDCHF",
+    "NZD/USD": "FX:NZDUSD",
+    "EUR/GBP": "FX:EURGBP",
+    "EUR/JPY": "FX:EURJPY",
+    "GBP/JPY": "FX:GBPJPY",
+    "BITCOIN": "BINANCE:BTCUSDT",
+    "ETHEREUM": "BINANCE:ETHUSDT",
+    "SOLANA": "BINANCE:SOLUSDT"
+}
+
+chart_asset = st.selectbox("Chart Asset:", available_clean_names if available_clean_names else ["NIFTY 50"], key="tv_select")
+
+if chart_asset in tv_symbol_map:
+    tv_symbol = tv_symbol_map[chart_asset]
+else:
+    found_t = None
+    for t, m in NAME_MAP.items():
+        if m == chart_asset:
+            found_t = t
+            break
+    if found_t:
+        if ".NS" in found_t:
+            tv_symbol = "NSE:" + found_t.replace(".NS", "")
+        else:
+            tv_symbol = "NASDAQ:" + found_t
+    else:
+        tv_symbol = "NSE:" + chart_asset.replace(".NS", "")
+
+tv_interval = curr_tf_conf["tv"]
+
+tv_code = f"""
+<div class="tradingview-widget-container" style="height:550px; width:100%;">
+  <div id="tradingview_chart" style="height:550px;"></div>
+  <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
+  <script type="text/javascript">
+  new TradingView.widget({{
+    "autosize": true,
+    "symbol": "{tv_symbol}",
+    "interval": "{tv_interval}",
+    "timezone": "Asia/Kolkata",
+    "theme": "dark",
+    "style": "1",
+    "locale": "en",
+    "toolbar_bg": "#131722",
+    "enable_publishing": false,
+    "hide_side_toolbar": false,
+    "allow_symbol_change": true,
+    "container_id": "tradingview_chart"
+  }});
+  </script>
+</div>
+"""
+components.html(tv_code, height=560)
