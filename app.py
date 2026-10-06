@@ -81,7 +81,7 @@ time_str = ist_now.strftime("%I:%M:%S %p IST")
 cur_mins = ist_now.hour * 60 + ist_now.minute
 
 # -------------------------------------------------------------
-# 4. ROBUST TICKER RESOLVER (NO MORE 100/150 ERRORS)
+# 4. ROBUST TICKER RESOLVER
 # -------------------------------------------------------------
 FOREX_MAP = {
     "AUD/USD": "AUDUSD=X", "EUR/USD": "EURUSD=X", "GBP/USD": "GBPUSD=X",
@@ -102,13 +102,13 @@ INDEX_MAP = {
 }
 
 MARKET_CATEGORIES = {
-    "Forex & Commodities": list(FOREX_MAP.keys()),
-    "US Equities (NASDAQ/NYSE)": ["AMZN", "GOOGL", "NVDA", "TSLA", "AAPL", "MSFT", "META", "AMD", "NFLX", "PLTR", "AVGO", "SMCI", "COIN", "MSTR"],
     "Indian Equities & Indices (NSE)": [
         "NIFTY 50", "BANK NIFTY", "RELIANCE", "TCS", "INFOSYS", "HDFCBANK", "ICICIBANK", "SBIN",
         "TATAMOTORS", "MARUTI", "M&M", "HAL", "BEL", "RVNL", "IRFC", "TATASTEEL", "JSWSTEEL",
         "ANGELONE", "BSE", "CDSL", "MCX", "ZOMATO", "TITAN", "ITC", "BHARTIARTL"
     ],
+    "Forex & Commodities": list(FOREX_MAP.keys()),
+    "US Equities (NASDAQ/NYSE)": ["AMZN", "GOOGL", "NVDA", "TSLA", "AAPL", "MSFT", "META", "AMD", "NFLX", "PLTR", "AVGO", "SMCI", "COIN", "MSTR"],
     "Crypto (24x7)": list(CRYPTO_MAP.keys())
 }
 
@@ -120,20 +120,16 @@ def resolve_ticker(asset_label):
     if asset_label in INDEX_MAP:
         return INDEX_MAP[asset_label]
     
-    # Clean check
     clean = asset_label.replace(".NS", "").replace("^", "").strip()
     if clean == "INFOSYS":
         return "INFY.NS"
-    
-    # Check Indian Stocks
     if clean in MARKET_CATEGORIES["Indian Equities & Indices (NSE)"]:
         return f"{clean}.NS"
-        
     return clean
 
 def get_tv_symbol(asset_label, yf_tick):
     if "=X" in yf_tick:
-        return f"FX:{yf_tick.replace('=X', '')}"
+        return f"FX_IDC:{yf_tick.replace('=X', '')}"
     if "=F" in yf_tick:
         return f"TVC:{yf_tick.replace('=F', '')}"
     if "-USD" in yf_tick:
@@ -143,21 +139,18 @@ def get_tv_symbol(asset_label, yf_tick):
         return f"NSE:{clean}"
     return f"NASDAQ:{yf_tick}"
 
-# Live Price Engine with Fallback
 @st.cache_data(ttl=30)
 def fetch_exact_live_price(ticker):
     try:
         t = yf.Ticker(ticker)
-        # Try fast 1d intraday first
         df = t.history(period="2d", interval="15m")
-        if df.empty or len(df) == 0:
+        if df.empty:
             df = t.history(period="5d", interval="1h")
         
         if not df.empty:
             c = float(df['Close'].dropna().iloc[-1])
             h = float(df['High'].dropna().iloc[-1])
             l = float(df['Low'].dropna().iloc[-1])
-            
             atr_s = ta.volatility.average_true_range(df['High'], df['Low'], df['Close'], window=14)
             atr = float(atr_s.dropna().iloc[-1]) if not atr_s.dropna().empty else (c * 0.01)
             return c, h, l, atr
@@ -256,22 +249,8 @@ with desk_left:
 
     active_ticker = resolve_ticker(active_chart_asset)
     tv_symbol = get_tv_symbol(active_chart_asset, active_ticker)
-
-   tv_html = f"""
-    <div class="tradingview-widget-container" style="height:530px; width:100%;">
-      ...
-    </div>
-    """
-    components.html(tv_html, height=540)
-```[cite: 11]
-
----
-
-### Aur iski jagah ye code paste kar dein:
-
-```python
-    # Free NSE Embed Widget Fix (Blocks 'Only on TradingView' popup)
     clean_tf = tv_tf.replace('m', '')
+
     if "NSE:" in tv_symbol:
         tv_html = f"""
         <div class="tradingview-widget-container" style="height:530px; width:100%;">
@@ -309,14 +288,13 @@ with desk_left:
         </div>
         """
     components.html(tv_html, height=540)
+
 with desk_right:
     st.markdown("#### ⚡ 1-Click Fast Execution")
     
-    # 1. Fetch Precise Live Market Price & ATR
     c_live, _, _, atr_live = fetch_exact_live_price(active_ticker)
     
     if c_live is None:
-        # Ultimate Fallback using fast quote
         try:
             f_tick = yf.Ticker(active_ticker)
             c_live = float(f_tick.fast_info['lastPrice'])
@@ -332,7 +310,6 @@ with desk_right:
     step_val = 0.0001 if (is_fx and asset_ltp < 20) else 0.05
     curr_prefix = "$" if selected_universe == "US Equities (NASDAQ/NYSE)" else ("₹" if "NSE" in selected_universe else "")
 
-    # 2. Strict 1:2 R:R Auto Calculation
     sl_dist = 1.0 * atr_val
     auto_sl_buy = round(asset_ltp - sl_dist, 4 if (is_fx and asset_ltp < 20) else 2)
     auto_tp_buy = round(asset_ltp + (2.0 * sl_dist), 4 if (is_fx and asset_ltp < 20) else 2)
@@ -343,7 +320,6 @@ with desk_right:
     fast_qty = st.number_input("Lots / Qty:", min_value=1, value=1, step=1)
     req_fund = asset_ltp * fast_qty
 
-    # 3. Live Auto SL & Auto 1:2 Target Boxes
     col_sl_b, col_tp_b = st.columns(2)
     with col_sl_b:
         exec_sl = st.number_input("Auto SL (1x ATR):", value=float(auto_sl_buy), step=step_val, format=dec_fmt)
@@ -427,7 +403,7 @@ with desk_right:
 st.markdown("---")
 
 # -------------------------------------------------------------
-# 8. SAHI RADAR TABS (OPTION CHAIN + SHOCKERS + 52W HIGH)
+# 8. SAHI RADAR TABS
 # -------------------------------------------------------------
 st.markdown("### 📊 Market Intelligence & Scanners")
 tab_opt, tab_shock, tab_52w = st.tabs([
