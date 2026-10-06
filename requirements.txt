@@ -5,3 +5,4 @@ yfinance
 ta
 pyotp
 smartapi-python
+st-gsheets-connection
