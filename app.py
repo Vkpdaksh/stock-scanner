@@ -238,28 +238,43 @@ def place_order_smartapi(symbol_token, trading_symbol, exchange, qty, transactio
         return False, str(e)
 
 # -------------------------------------------------------------
-# 5. WATCHLISTS & ASSETS UNIVERSE
+# 5. WATCHLISTS & ASSETS UNIVERSE (POORI ORIGINAL LIST)
 # -------------------------------------------------------------
 NSE_EQUITIES = [
     "^NSEI", "^NSEBANK",
-    "HDFCBANK.NS", "ICICIBANK.NS", "SBIN.NS", "AXISBANK.NS", "KOTAKBANK.NS",
-    "TCS.NS", "INFY.NS", "HCLTECH.NS", "WIPRO.NS", "TATAMOTORS.NS", "MARUTI.NS",
-    "RELIANCE.NS", "ONGC.NS", "NTPC.NS", "POWERGRID.NS", "TATAPOWER.NS",
-    "HAL.NS", "BEL.NS", "RVNL.NS", "IRFC.NS", "TATASTEEL.NS", "JSWSTEEL.NS",
-    "LT.NS", "ITC.NS", "HINDUNILVR.NS", "TITAN.NS", "SUNPHARMA.NS", "BHARTIARTL.NS"
+    "HDFCBANK.NS", "ICICIBANK.NS", "SBIN.NS", "AXISBANK.NS", "KOTAKBANK.NS", 
+    "INDUSINDBK.NS", "BAJFINANCE.NS", "BAJAJFINSV.NS", "SBILIFE.NS", "JIOFIN.NS", 
+    "ANGELONE.NS", "BSE.NS", "CDSL.NS", "MCX.NS",
+    "TCS.NS", "INFY.NS", "HCLTECH.NS", "WIPRO.NS", "LTIM.NS", 
+    "PERSISTENT.NS", "COFORGE.NS", "TATATECH.NS",
+    "TATAMOTORS.NS", "MARUTI.NS", "M&M.NS", "EICHERMOT.NS", "ASHOKLEY.NS", "EXIDEIND.NS",
+    "RELIANCE.NS", "ONGC.NS", "COALINDIA.NS", "NTPC.NS", "POWERGRID.NS", 
+    "TATAPOWER.NS", "ADANIGREEN.NS", "SUZLON.NS", "IREDA.NS",
+    "HAL.NS", "BEL.NS", "BDL.NS", "BHEL.NS", "MAZDOCK.NS", "COCHINSHIP.NS",
+    "RVNL.NS", "IRFC.NS", "IRCON.NS", "RAILTEL.NS", "HUDCO.NS", "NBCC.NS",
+    "TATASTEEL.NS", "JSWSTEEL.NS", "HINDALCO.NS", "SAIL.NS", "NMDC.NS", "NATIONALUM.NS",
+    "LT.NS", "ULTRACEMCO.NS", "GRASIM.NS", "DLF.NS", "LODHA.NS",
+    "ITC.NS", "HINDUNILVR.NS", "ASIANPAINT.NS", "TATACONSUM.NS", "TITAN.NS", 
+    "TRENT.NS", "ZOMATO.NS", "KALYANKJIL.NS", "DIXON.NS", "POLYCAB.NS", "KEI.NS",
+    "SUNPHARMA.NS", "CIPLA.NS", "DRREDDY.NS", "DIVISLAB.NS", "AUROPHARMA.NS", "LUPIN.NS",
+    "BHARTIARTL.NS", "ADANIENT.NS", "ADANIPORTS.NS"
 ]
 
 COMMODITIES_AND_FOREX = [
     "GC=F", "SI=F", "CL=F", "HG=F", "NG=F",
-    "INR=X", "EURUSD=X", "GBPUSD=X", "USDJPY=X"
+    "INR=X", "EURUSD=X", "GBPUSD=X", "USDJPY=X", 
+    "AUDUSD=X", "USDCAD=X", "USDCHF=X", "NZDUSD=X",
+    "EURGBP=X", "EURJPY=X", "GBPJPY=X"
 ]
 
 US_EQUITIES = [
-    "GOOGL", "NVDA", "TSLA", "AAPL", "MSFT", "AMZN", "META", "AMD", "NFLX", "PLTR"
+    "GOOGL", "NVDA", "TSLA", "AAPL", "MSFT", "AMZN", "META", "AMD", "NFLX", "PLTR",
+    "AVGO", "SMCI", "ARM", "QCOM", "INTC", "MU", "PANW", "CRWD", "COIN", "MSTR"
 ]
 
 CRYPTO_ASSETS = [
-    "BTC-USD", "ETH-USD", "SOL-USD"
+    "BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD", "BNB-USD",
+    "ADA-USD", "DOGE-USD", "AVAX-USD", "LINK-USD", "SUI-USD"
 ]
 
 MARKET_UNIVERSES = {
@@ -281,9 +296,23 @@ NAME_MAP = {
     "EURUSD=X": "EUR/USD",
     "GBPUSD=X": "GBP/USD",
     "USDJPY=X": "USD/JPY",
+    "AUDUSD=X": "AUD/USD",
+    "USDCAD=X": "USD/CAD",
+    "USDCHF=X": "USD/CHF",
+    "NZDUSD=X": "NZD/USD",
+    "EURGBP=X": "EUR/GBP",
+    "EURJPY=X": "EUR/JPY",
+    "GBPJPY=X": "GBP/JPY",
     "BTC-USD": "BITCOIN",
     "ETH-USD": "ETHEREUM",
-    "SOL-USD": "SOLANA"
+    "SOL-USD": "SOLANA",
+    "GOOGL": "ALPHABET (GOOGLE)",
+    "NVDA": "NVIDIA",
+    "TSLA": "TESLA",
+    "AAPL": "APPLE",
+    "MSFT": "MICROSOFT",
+    "AMZN": "AMAZON",
+    "META": "META PLATFORMS"
 }
 
 def calculate_vwap(df):
@@ -375,7 +404,7 @@ else:
 st.markdown("---")
 
 # -------------------------------------------------------------
-# 8. MARKET SCANNER ENGINE (OPTIMIZED SWING LOGIC)
+# 8. MARKET SCANNER ENGINE
 # -------------------------------------------------------------
 available_universes = list(MARKET_UNIVERSES.keys())
 
@@ -446,7 +475,6 @@ if raw_data is not None:
             rvol = (c_vol / avg_vol) if avg_vol > 0 else 1.0
             rvol_display = "Liquid" if is_special else f"{round(rvol, 2)}x"
 
-            # Filter: Overbought (RSI > 68) trades ko avoid karein taaki trap na ho
             is_breakout = (c_close > res_level) and (c_close > c_open) and (c_close > ema20) and (50 <= rsi <= 68)
             is_breakdown = (c_close < sup_level) and (c_close < c_open) and (c_close < ema20) and (32 <= rsi <= 50)
 
@@ -465,16 +493,16 @@ if raw_data is not None:
                 grade = "Neutral"
                 trade_logic = "Oscillating within consolidation range."
 
-            # OPTIMIZED 1:1 REALISTIC SWING TARGETS
-            sl_dist = 1.0 * atr  # Realistic Stop Loss
+            # OPTIMIZED 1:1 REALISTIC TARGETS
+            sl_dist = 1.0 * atr
             if "SELL" in signal:
                 sl = c_close + sl_dist
-                target_1 = c_close - (1.0 * sl_dist)  # 1:1 Ratio (Pehla target asani se hit hota hai)
-                target_2 = c_close - (2.0 * sl_dist)  # 1:2 Extended
+                target_1 = c_close - (1.0 * sl_dist)
+                target_2 = c_close - (2.0 * sl_dist)
             else:
                 sl = c_close - sl_dist
-                target_1 = c_close + (1.0 * sl_dist)  # 1:1 Ratio
-                target_2 = c_close + (2.0 * sl_dist)  # 1:2 Extended
+                target_1 = c_close + (1.0 * sl_dist)
+                target_2 = c_close + (2.0 * sl_dist)
 
             risk_per_unit = max(abs(c_close - sl), 0.0001)
             units_by_risk = int(risk_per_trade / risk_per_unit)
@@ -534,6 +562,15 @@ def get_live_candle_data(asset_name):
             return c, h, l
     except Exception:
         pass
+    try:
+        t_df = yf.download(asset_name, period="2d", interval="1h", progress=False)
+        if not t_df.empty:
+            c = float(t_df['Close'].dropna().iloc[-1])
+            h = float(t_df['High'].dropna().iloc[-1])
+            l = float(t_df['Low'].dropna().iloc[-1])
+            return c, h, l
+    except Exception:
+        pass
     return None, None, None
 
 # -------------------------------------------------------------
@@ -559,7 +596,6 @@ for trade in all_trades:
         side_type = trade.get("type")
         inv_fund = float(trade.get("invested_capital", e_price * q))
 
-        # Check with Candle High/Low so targets aren't missed
         if side_type == "BUY":
             tp_hit = (c_high >= t_price) or (c_ltp >= t_price)
             sl_hit = (c_low <= s_price) or (c_ltp <= s_price)
@@ -799,89 +835,4 @@ with btn_col1:
                 "tp1": custom_tp,
                 "tp2": selected_item.get("Target 2 (1:2 Ext)", custom_tp) if selected_item else custom_tp,
                 "qty": qty_input,
-                "invested_capital": required_fund,
-                "status": "OPEN",
-                "timeframe": swing_tf
-            }
-            db_insert_trade(new_trade)
-            db_update_portfolio(balance=available_balance - required_fund)
-            st.success(f"✅ ₹{required_fund:,.2f} locked in database for {chosen_asset}! Preserved across days.")
-            st.rerun()
-
-with btn_col2:
-    if st.button("🚀 Fire Real Order (Angel One Delivery)", use_container_width=True):
-        if is_beginner:
-            st.error("Beginner mode me Real Trading locked hai. Top se 'Pro Trader' chunein.")
-        else:
-            raw_sym = selected_item["Ticker"] if selected_item else chosen_asset
-            exch = "NSE" if ".NS" in raw_sym or "^NSE" in raw_sym else "MCX"
-            clean_sym = raw_sym.replace(".NS", "").replace("^", "")
-
-            ok, msg = place_order_smartapi(
-                symbol_token=clean_sym,
-                trading_symbol=clean_sym,
-                exchange=exch,
-                qty=qty_input,
-                transaction_type=side,
-                price=custom_exec_price
-            )
-            if ok:
-                st.success(f"🟢 REAL BROKER ORDER: {msg}")
-            else:
-                st.error(f"🔴 REAL BROKER ORDER FAILED: {msg}")
-
-# -------------------------------------------------------------
-# 14. COMPLETED TRADE HISTORY LEDGER
-# -------------------------------------------------------------
-if closed_trades:
-    with st.expander("📜 Completed Paper Trades Ledger", expanded=False):
-        history_df = pd.DataFrame(closed_trades)[["id", "date", "asset", "type", "entry", "exit_price", "qty", "pnl", "status", "exit_time"]]
-        st.dataframe(history_df, use_container_width=True, hide_index=True)
-
-# -------------------------------------------------------------
-# 15. TRADINGVIEW LIVE CHART
-# -------------------------------------------------------------
-st.markdown("### 📈 Interactive TradingView Live Chart")
-tv_symbol_map = {
-    "ALPHABET (GOOGLE)": "NASDAQ:GOOGL",
-    "NVIDIA": "NASDAQ:NVDA",
-    "TESLA": "NASDAQ:TSLA",
-    "APPLE": "NASDAQ:AAPL",
-    "MICROSOFT": "NASDAQ:MSFT",
-    "NIFTY 50": "NSE:NIFTY",
-    "BANK NIFTY": "NSE:BANKNIFTY",
-    "XAUUSD (Gold)": "TVC:GOLD",
-    "XAGUSD (Silver)": "TVC:SILVER",
-    "CRUDE OIL": "TVC:USOIL",
-    "USD/INR": "FX_IDC:USDINR",
-    "EUR/USD": "FX:EURUSD",
-    "BITCOIN": "BINANCE:BTCUSDT"
-}
-
-chart_asset = st.selectbox("Chart Asset:", available_clean_names if available_clean_names else ["NIFTY 50"], key="tv_select")
-tv_symbol = tv_symbol_map.get(chart_asset, "NSE:" + chart_asset.replace(".NS", ""))
-tv_interval = curr_tf_conf["tv"]
-
-tv_code = f"""
-<div class="tradingview-widget-container" style="height:550px; width:100%;">
-  <div id="tradingview_chart" style="height:550px;"></div>
-  <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
-  <script type="text/javascript">
-  new TradingView.widget({{
-    "autosize": true,
-    "symbol": "{tv_symbol}",
-    "interval": "{tv_interval}",
-    "timezone": "Asia/Kolkata",
-    "theme": "dark",
-    "style": "1",
-    "locale": "en",
-    "toolbar_bg": "#131722",
-    "enable_publishing": false,
-    "hide_side_toolbar": false,
-    "allow_symbol_change": true,
-    "container_id": "tradingview_chart"
-  }});
-  </script>
-</div>
-"""
-components.html(tv_code, height=560)
+                "invested_capital": required_fund
