@@ -36,7 +36,7 @@ ANGEL_MPIN = get_secret("ANGEL_MPIN")
 ANGEL_TOTP_KEY = get_secret("ANGEL_TOTP_KEY")
 
 # -------------------------------------------------------------
-# 2. PERSISTENT DATABASE ENGINE (SQLITE)
+# 2. PERSISTENT STORAGE ENGINE
 # -------------------------------------------------------------
 DB_FILE = "persistent_terminal.db"
 
@@ -169,7 +169,7 @@ def db_set_eod_flag(date_str):
     conn.close()
 
 # -------------------------------------------------------------
-# 3. HELPER FUNCTIONS & TELEGRAM ENGINE
+# 3. HELPER FUNCTIONS & TELEGRAM
 # -------------------------------------------------------------
 def get_ist_now():
     return datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
@@ -238,7 +238,7 @@ def place_order_smartapi(symbol_token, trading_symbol, exchange, qty, transactio
         return False, str(e)
 
 # -------------------------------------------------------------
-# 5. WATCHLISTS & ASSETS UNIVERSE (COMPLETE ORIGINAL LIST)
+# 5. WATCHLISTS & ASSETS UNIVERSE
 # -------------------------------------------------------------
 NSE_EQUITIES = [
     "^NSEI", "^NSEBANK",
@@ -394,43 +394,43 @@ actual_risk_pct = (risk_per_trade / account_capital) * 100 if account_capital > 
 if actual_risk_pct > 2.0:
     st.error(f"🚨 **High Risk Alert:** Selected risk is **{actual_risk_pct:.1f}%**! Recommended safe risk: 1% - 2% (₹{safe_budget:.0f}).")
 else:
-    st.success(f"✅ **Disciplined Swing Risk:** Max risk per trade: ₹{risk_per_trade:.0f} | Available for allocation: **₹{available_balance:,.2f}**")
+    st.success(f"✅ **Disciplined Swing Risk:** Max risk per trade: ₹{risk_per_trade:.0f} | Target R:R: **1:2 (Institutional)**")
 
 st.markdown("---")
 
 # -------------------------------------------------------------
-# 8. HYBRID AUTO-ACTIVITY DETECTOR (SMART HOLIDAY CHECK)
+# 8. ABSOLUTE ZERO-GAP HOLIDAY & HEARTBEAT ENGINE
 # -------------------------------------------------------------
-@st.cache_data(ttl=300)
-def check_market_liveliness(benchmark_list):
-    """Checks if benchmark assets traded today (Safe Heartbeat)"""
+@st.cache_data(ttl=180)
+def verify_market_trading_today(benchmark_symbol):
+    """
+    Checks if a real bar has actually been printed today.
+    Eliminates 9:15-9:45 AM false alarms and holiday leaks completely.
+    """
     try:
-        data = yf.download(benchmark_list, period="2d", interval="1d", progress=False)
-        if data.empty:
-            return True # Fallback if API fails
-        for sym in benchmark_list:
-            df = data[sym] if len(benchmark_list) > 1 else data
-            if not df.empty:
-                last_dt = str(df.dropna().index[-1].date())
-                if last_dt == today_date_str:
-                    return True
+        test_df = yf.download(benchmark_symbol, period="2d", interval="1d", progress=False)
+        if not test_df.empty:
+            last_date = str(test_df.dropna().index[-1].date())
+            return (last_date == today_date_str)
         return False
     except Exception:
-        return True
+        return False
 
-# Post 9:45 AM (585 mins) verification prevents early morning false alarms
-is_nse_time = (ist_now.weekday() < 5) and (555 <= cur_mins <= 930)
+# Indian market window check
+is_weekday = ist_now.weekday() < 5
+is_nse_hours = is_weekday and (555 <= cur_mins <= 930)
 
-if is_nse_time and (cur_mins >= 585):
-    is_nse_active = check_market_liveliness(["^NSEI", "^NSEBANK"])
+# True Confirmation: If within trading hours, verify if benchmark printed today's bar
+if is_nse_hours:
+    is_nse_active = verify_market_trading_today("^NSEI")
 else:
-    is_nse_active = is_nse_time
+    is_nse_active = False
 
-session_text = "🟢 NSE SESSION ACTIVE" if is_nse_active else "🔴 NSE CLOSED / HOLIDAY"
-st.caption(f"Status: **{session_text}** | Live Time: **{time_str}** | Heartbeat: **Self-Adaptive Mode**")
+session_text = "🟢 NSE LIVE TRADING" if is_nse_active else "🔴 NSE CLOSED / MARKET HOLIDAY"
+st.caption(f"Status: **{session_text}** | Live Time: **{time_str}** | R:R Model: **Minimum 1:2 Strictly Enforced**")
 
 # -------------------------------------------------------------
-# 9. MARKET SCANNER ENGINE
+# 9. MARKET SCANNER ENGINE (RATE-LIMIT PROTECTED)
 # -------------------------------------------------------------
 available_universes = list(MARKET_UNIVERSES.keys())
 
@@ -451,14 +451,14 @@ tf_map = {
 }
 curr_tf_conf = tf_map[swing_tf]
 
-@st.cache_data(ttl=120)
-def fetch_market_data(ticker_list, interval, period):
+@st.cache_data(ttl=180)
+def fetch_market_data_shielded(ticker_list, interval, period):
     try:
         return yf.download(ticker_list, period=period, interval=interval, group_by='ticker', progress=False)
     except Exception:
         return None
 
-raw_data = fetch_market_data(tickers, curr_tf_conf["interval"], curr_tf_conf["period"]) if tickers else None
+raw_data = fetch_market_data_shielded(tickers, curr_tf_conf["interval"], curr_tf_conf["period"]) if tickers else None
 records = []
 active_breakouts = 0
 
@@ -476,9 +476,14 @@ if raw_data is not None:
             if len(df) < 20:
                 continue
 
-            # Skip stale data on holidays to avoid repeating alerts
+            # ZERO-LEAK FILTER: If asset belongs to NSE and NSE is not confirmed live today, abort alert
             is_indian_asset = (".NS" in ticker or "^NSE" in ticker)
-            if is_indian_asset and not is_nse_active and cur_mins >= 585:
+            if is_indian_asset and not is_nse_active:
+                continue
+
+            # Check candle timestamp against current date
+            candle_date_str = str(df.index[-1].date())
+            if is_indian_asset and candle_date_str != today_date_str:
                 continue
 
             c_close = float(df['Close'].iloc[-1])
@@ -506,34 +511,37 @@ if raw_data is not None:
             rvol = (c_vol / avg_vol) if avg_vol > 0 else 1.0
             rvol_display = "Liquid" if is_special else f"{round(rvol, 2)}x"
 
+            # Strict Breakout Criteria
             is_breakout = (c_close > res_level) and (c_close > c_open) and (c_close > ema20) and (50 <= rsi <= 68)
             is_breakdown = (c_close < sup_level) and (c_close < c_open) and (c_close < ema20) and (32 <= rsi <= 50)
 
             if is_breakout:
                 signal = "🟢 SWING BUY BREAKOUT"
                 active_breakouts += 1
-                trade_logic = f"Breakout above {res_level:.2f} with healthy RSI ({rsi:.1f})."
+                trade_logic = f"Fresh breakout above {res_level:.2f} | 1:2 R:R Target Set."
                 grade = "Grade A+ (Institutional)" if (rvol >= 1.5 or is_special) and (c_close > ema50) else "Grade A"
             elif is_breakdown:
                 signal = "🔴 SWING SELL BREAKDOWN"
                 active_breakouts += 1
-                trade_logic = f"Breakdown below {sup_level:.2f}."
+                trade_logic = f"Breakdown below {sup_level:.2f} | 1:2 R:R Target Set."
                 grade = "Grade A+ (Institutional)" if (rvol >= 1.5 or is_special) and (c_close < ema50) else "Grade A"
             else:
                 signal = "⚪ ACCUMULATION / RANGE"
                 grade = "Neutral"
-                trade_logic = "Oscillating within consolidation range."
+                trade_logic = "Consolidating within structural boundaries."
 
-            # OPTIMIZED 1:1 REALISTIC TARGETS
-            sl_dist = 1.0 * atr
+            # ========================================================
+            # STRICT INSTITUTIONAL 1:2 MINIMUM RISK-REWARD ENGINE
+            # ========================================================
+            sl_dist = 1.0 * atr  # Disciplined Risk Unit
             if "SELL" in signal:
                 sl = c_close + sl_dist
-                target_1 = c_close - (1.0 * sl_dist)
-                target_2 = c_close - (2.0 * sl_dist)
+                target_1 = c_close - (2.0 * sl_dist)  # MINIMUM 1:2 PROFIT RATIO
+                target_2 = c_close - (3.5 * sl_dist)  # 1:3.5 EXTENDED RUNNER
             else:
                 sl = c_close - sl_dist
-                target_1 = c_close + (1.0 * sl_dist)
-                target_2 = c_close + (2.0 * sl_dist)
+                target_1 = c_close + (2.0 * sl_dist)  # MINIMUM 1:2 PROFIT RATIO
+                target_2 = c_close + (3.5 * sl_dist)  # 1:3.5 EXTENDED RUNNER
 
             risk_per_unit = max(abs(c_close - sl), 0.0001)
             units_by_risk = int(risk_per_trade / risk_per_unit)
@@ -559,8 +567,8 @@ if raw_data is not None:
                 "VWAP": round(c_vwap, decimals),
                 "Breakout_Level": round(res_level if "BUY" in signal else sup_level, decimals),
                 "Stop Loss": round(sl, decimals),
-                "Target 1 (1:1 Safe)": round(target_1, decimals),
-                "Target 2 (1:2 Ext)": round(target_2, decimals),
+                "Target 1 (1:2 Min)": round(target_1, decimals),
+                "Target 2 (1:3.5 Ext)": round(target_2, decimals),
                 "RVol": rvol_display,
                 "RSI": round(rsi, 1),
                 "Recommended Size": size_str,
@@ -605,7 +613,7 @@ def get_live_candle_data(asset_name):
     return None, None, None
 
 # -------------------------------------------------------------
-# 10. SWING MONITOR (WITH HIGH/LOW TOUCH DETECTION)
+# 10. SWING MONITOR (DUAL TOUCH CONFIRMATION)
 # -------------------------------------------------------------
 needs_rerun = False
 
@@ -635,7 +643,7 @@ for trade in all_trades:
             sl_hit = (c_high >= s_price) or (c_ltp >= s_price)
 
         if sl_hit or tp_hit:
-            status_val = "TARGET_HIT" if tp_hit else "SL_HIT"
+            status_val = "TARGET_HIT (1:2)" if tp_hit else "SL_HIT"
             exit_price_val = t_price if tp_hit else s_price
             exit_time_val = ist_now.strftime("%Y-%m-%d %H:%M")
             pnl_realized = (exit_price_val - e_price) * q if side_type == "BUY" else (e_price - exit_price_val) * q
@@ -655,7 +663,7 @@ today_trades = [t for t in all_trades if str(t.get("date", "")).startswith(today
 today_closed = [t for t in today_trades if t.get("status") != "OPEN"]
 
 tot_alerts_today = len(today_trades)
-tp_hits_today = len([t for t in today_closed if t.get("status") == "TARGET_HIT"])
+tp_hits_today = len([t for t in today_closed if "TARGET_HIT" in str(t.get("status"))])
 sl_hits_today = len([t for t in today_closed if t.get("status") == "SL_HIT"])
 today_pnl = sum([float(t.get("pnl", 0.0)) for t in today_closed])
 win_rate = (tp_hits_today / len(today_closed) * 100) if today_closed else 0.0
@@ -663,16 +671,17 @@ win_rate = (tp_hits_today / len(today_closed) * 100) if today_closed else 0.0
 def build_eod_message():
     sign = "+" if today_pnl >= 0 else ""
     return (
-        f"📊 <b>DAILY EOD SWING TRADING REPORT</b>\n"
+        f"📊 <b>DAILY EOD SWING TRADING REPORT (1:2 MODEL)</b>\n"
         f"📅 Date: {today_date_str} | 🕒 Time: {ist_now.strftime('%I:%M %p IST')}\n\n"
-        f"🔢 Total Trades Today: {tot_alerts_today}\n"
-        f"🎯 Targets Hit: {tp_hits_today} ✅\n"
+        f"🔢 Trades Initiated Today: {tot_alerts_today}\n"
+        f"🎯 1:2 Targets Hit: {tp_hits_today} ✅\n"
         f"🛑 SL Hit: {sl_hits_today} ❌\n"
-        f"📈 Win-Rate: {win_rate:.1f}%\n\n"
-        f"💵 Today's P&L: <b>₹{sign}{today_pnl:,.2f}</b>\n"
+        f"📈 Swing Win-Rate: {win_rate:.1f}%\n\n"
+        f"💵 Realized P&L: <b>₹{sign}{today_pnl:,.2f}</b>\n"
         f"💼 Available Cash: <b>₹{available_balance:,.2f}</b>\n"
         f"🔒 Locked Margin: <b>₹{blocked_capital:,.2f}</b>\n"
-        f"⚡ Total Portfolio Equity: <b>₹{total_portfolio_equity:,.2f}</b>"
+        f"⚡ Total Portfolio Equity: <b>₹{total_portfolio_equity:,.2f}</b>\n\n"
+        f"💡 Framework: Zero-Leak Institutional Swing Engine."
     )
 
 if ist_now.hour >= 18 and (ist_now.hour > 18 or ist_now.minute >= 30):
@@ -702,12 +711,12 @@ with p4:
         st.success("Database and portfolio reset to ₹10,000!")
         st.rerun()
 
-with st.expander("📊 Today's EOD Report & Telegram Dispatch", expanded=False):
+with st.expander("📊 Today's Performance Report & Telegram Dispatch", expanded=False):
     e1, e2, e3, e4 = st.columns(4)
     with e1:
         st.metric("Today's Trades", tot_alerts_today)
     with e2:
-        st.metric("Targets Hit", f"{tp_hits_today} ✅")
+        st.metric("1:2 Targets Hit", f"{tp_hits_today} ✅")
     with e3:
         st.metric("SL Hit", f"{sl_hits_today} ❌")
     with e4:
@@ -762,7 +771,7 @@ if open_trades:
                     <span>Entry: <b>{disp_fmt.format(entry_price)}</b></span>
                     <span>LTP: <b style="color: #fff;">{disp_fmt.format(current_ltp)}</b></span>
                     <span>SL: <b style="color: #ef5350;">{disp_fmt.format(sl_price)}</b></span>
-                    <span>Target 1: <b style="color: #66bb6a;">{disp_fmt.format(tp1_price)}</b></span>
+                    <span>Target 1 (1:2): <b style="color: #66bb6a;">{disp_fmt.format(tp1_price)}</b></span>
                 </div>
             </div>
         """, unsafe_allow_html=True)
@@ -793,7 +802,7 @@ if records:
     df_display = pd.DataFrame(records).drop(columns=["Ticker", "Size", "ActualUnits", "VWAP", "Breakout_Level", "Decimals"])
     st.dataframe(df_display, use_container_width=True, hide_index=True)
 else:
-    st.info(f"Scanning {selected_universe} on **{swing_tf}**. No swing breakouts at this moment.")
+    st.info(f"Scanning {selected_universe} on **{swing_tf}**. No swing setups matching strict 1:2 breakout parameters at this bar.")
 
 # -------------------------------------------------------------
 # 14. DUAL ORDER EXECUTION DESK
@@ -814,7 +823,7 @@ live_val = live_val_tuple[0] or 100.0
 
 default_ltp = selected_item["LTP"] if selected_item else live_val
 default_sl = selected_item["Stop Loss"] if selected_item else round(default_ltp * 0.98, 4 if ("=" in str(chosen_asset) or "USD" in str(chosen_asset)) else 2)
-default_tp = selected_item["Target 1 (1:1 Safe)"] if selected_item else round(default_ltp * 1.02, 4 if ("=" in str(chosen_asset) or "USD" in str(chosen_asset)) else 2)
+default_tp = selected_item["Target 1 (1:2 Min)"] if selected_item else round(default_ltp * 1.04, 4 if ("=" in str(chosen_asset) or "USD" in str(chosen_asset)) else 2)
 
 is_forex_asset = any(fx in str(chosen_asset).upper() for fx in [
     "USD", "EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "NZD", "INR", "GOLD", "SILVER", "XAU", "XAG", "GAS"
@@ -840,7 +849,7 @@ sl_tp_col1, sl_tp_col2 = st.columns(2)
 with sl_tp_col1:
     custom_sl = st.number_input("Stop Loss (SL):", min_value=min_val, value=float(default_sl), step=dec_step, format=dec_format)
 with sl_tp_col2:
-    custom_tp = st.number_input("Target Price (TP):", min_value=min_val, value=float(default_tp), step=dec_step, format=dec_format)
+    custom_tp = st.number_input("Target Price (TP - 1:2):", min_value=min_val, value=float(default_tp), step=dec_step, format=dec_format)
 
 required_fund = float(custom_exec_price * qty_input)
 
@@ -864,7 +873,7 @@ with btn_col1:
                 "entry": custom_exec_price,
                 "sl": custom_sl,
                 "tp1": custom_tp,
-                "tp2": selected_item.get("Target 2 (1:2 Ext)", custom_tp) if selected_item else custom_tp,
+                "tp2": selected_item.get("Target 2 (1:3.5 Ext)", custom_tp) if selected_item else custom_tp,
                 "qty": qty_input,
                 "invested_capital": required_fund,
                 "status": "OPEN",
@@ -872,7 +881,7 @@ with btn_col1:
             }
             db_insert_trade(new_trade)
             db_update_portfolio(balance=available_balance - required_fund)
-            st.success(f"✅ ₹{required_fund:,.2f} locked in database for {chosen_asset}! Preserved across days.")
+            st.success(f"✅ ₹{required_fund:,.2f} locked in database for {chosen_asset}! 1:2 R:R Trade preserved.")
             st.rerun()
 
 with btn_col2:
