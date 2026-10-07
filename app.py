@@ -8,7 +8,6 @@ import numpy as np
 import yfinance as yf
 import ta
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 from datetime import datetime, timezone, timedelta
 from streamlit_gsheets import GSheetsConnection
 
@@ -37,7 +36,7 @@ ANGEL_MPIN = get_secret("ANGEL_MPIN")
 ANGEL_TOTP_KEY = get_secret("ANGEL_TOTP_KEY")
 
 # -------------------------------------------------------------
-# 2. GOOGLE SHEETS CLOUD STORAGE (PERSISTENT DATA)
+# 2. GOOGLE SHEETS CLOUD STORAGE (NEVER WIPES OUT)
 # -------------------------------------------------------------
 @st.cache_resource
 def get_sheets_connection():
@@ -67,7 +66,7 @@ def save_sheet_trades(df):
         conn.update(data=df)
         return True
     except Exception as e:
-        st.error(f"Google Sheets Error: {str(e)}")
+        st.error(f"Error saving to Google Sheets: {str(e)}")
         return False
 
 # -------------------------------------------------------------
@@ -221,67 +220,57 @@ if sheet_modified:
     st.rerun()
 
 # -------------------------------------------------------------
-# 7. SINGLE-SCREEN TRADING DESK (PRO CANDLESTICK ENGINE)
+# 7. SINGLE-SCREEN TRADING DESK
 # -------------------------------------------------------------
 st.markdown("### 🖥️ Single-Screen Trading Desk")
 desk_left, desk_right = st.columns([2.3, 1.2])
 
 with desk_left:
-    active_chart_asset = st.selectbox("Active Asset:", tickers_in_univ, index=0, key="screen_asset_sel")
+    sel_c1, sel_c2 = st.columns([2, 1])
+    with sel_c1:
+        active_chart_asset = st.selectbox("Active Asset:", tickers_in_univ, index=0, key="screen_asset_sel")
+    with sel_c2:
+        chart_interval_desk = st.selectbox("Desk TF:", ["5m", "15m", "60m", "D"], index=2, key="chart_tf_sel")
+        
     active_ticker = resolve_ticker(active_chart_asset)
-    
-    df_chart = fetch_chart_dataframe(active_ticker, chart_interval)
+    df_chart = fetch_chart_dataframe(active_ticker, chart_interval_desk)
     
     if not df_chart.empty:
-        # EMA 20 Calculation
-        df_chart['EMA20'] = df_chart['Close'].ewm(span=20, adjust=False).mean()
+        plot_df = df_chart.tail(65).copy()
+        plot_df['EMA20'] = plot_df['Close'].ewm(span=20, adjust=False).mean()
 
-        # Candlestick + Volume Subplot Figure
-        fig = make_subplots(
-            rows=2, cols=1, 
-            shared_xaxes=True, 
-            vertical_spacing=0.03, 
-            subplot_titles=(f"{active_chart_asset} ({active_ticker}) - Live {chart_interval} Candlestick Chart", "Volume"),
-            row_width=[0.2, 0.8]
-        )
-
-        # 1. Candlestick Bars
+        fig = go.Figure()
         fig.add_trace(go.Candlestick(
-            x=df_chart.index,
-            open=df_chart['Open'],
-            high=df_chart['High'],
-            low=df_chart['Low'],
-            close=df_chart['Close'],
+            x=plot_df.index,
+            open=plot_df['Open'],
+            high=plot_df['High'],
+            low=plot_df['Low'],
+            close=plot_df['Close'],
             name="Price",
-            increasing_line_color='#26a69a',
-            decreasing_line_color='#ef5350'
-        ), row=1, col=1)
+            increasing_line_color='#089981',
+            decreasing_line_color='#f23645',
+            increasing_fillcolor='#089981',
+            decreasing_fillcolor='#f23645',
+            line=dict(width=1.5)
+        ))
 
-        # 2. EMA 20 Overlay Line
         fig.add_trace(go.Scatter(
-            x=df_chart.index,
-            y=df_chart['EMA20'],
+            x=plot_df.index,
+            y=plot_df['EMA20'],
             line=dict(color='#ff9800', width=1.5),
             name="EMA 20"
-        ), row=1, col=1)
-
-        # 3. Volume Bars
-        vol_colors = ['#26a69a' if c >= o else '#ef5350' for c, o in zip(df_chart['Close'], df_chart['Open'])]
-        fig.add_trace(go.Bar(
-            x=df_chart.index,
-            y=df_chart['Volume'],
-            marker_color=vol_colors,
-            name="Volume",
-            showlegend=False
-        ), row=2, col=1)
+        ))
 
         fig.update_layout(
             template="plotly_dark",
-            height=530,
-            margin=dict(l=10, r=10, t=30, b=10),
+            height=520,
+            margin=dict(l=5, r=45, t=35, b=10),
             xaxis_rangeslider_visible=False,
+            title=f"<b>{active_chart_asset}</b> ({active_ticker}) - Live {chart_interval_desk} Pro Chart",
             paper_bgcolor="#131722",
-            plot_bgcolor="#131722"
+            plot_bgcolor="#131722",
+            yaxis=dict(side="right", gridcolor="#1e222d"),
+            xaxis=dict(gridcolor="#1e222d", type="category")
         )
         st.plotly_chart(fig, use_container_width=True)
     else:
@@ -303,7 +292,6 @@ with desk_right:
     step_val = 0.0001 if (is_fx and asset_ltp < 20) else 0.05
     curr_prefix = "$" if selected_universe == "US Equities (NASDAQ/NYSE)" else ("₹" if "NSE" in selected_universe else "")
 
-    # Strict 1:2 R:R Formula
     sl_dist = 1.0 * atr_val
     auto_sl_buy = round(asset_ltp - sl_dist, 4 if (is_fx and asset_ltp < 20) else 2)
     auto_tp_buy = round(asset_ltp + (2.0 * sl_dist), 4 if (is_fx and asset_ltp < 20) else 2)
@@ -334,10 +322,10 @@ with desk_right:
                     "asset": active_chart_asset, "type": "BUY", "entry": asset_ltp,
                     "sl": exec_sl, "tp1": exec_tp, "tp2": auto_tp2_buy,
                     "qty": fast_qty, "invested_capital": req_fund,
-                    "status": "OPEN", "timeframe": chart_interval, "exit_price": 0.0, "exit_time": "", "pnl": 0.0
+                    "status": "OPEN", "timeframe": chart_interval_desk, "exit_price": 0.0, "exit_time": "", "pnl": 0.0
                 }])
                 save_sheet_trades(pd.concat([sheet_trades_df, row], ignore_index=True))
-                st.success("Buy Filled & Recorded in Google Sheet!")
+                st.success("Buy Filled & Saved to Google Sheet!")
                 st.rerun()
 
     with col_btn2:
@@ -354,10 +342,10 @@ with desk_right:
                     "asset": active_chart_asset, "type": "SELL", "entry": asset_ltp,
                     "sl": auto_sl_sell, "tp1": auto_tp_sell, "tp2": auto_tp2_sell,
                     "qty": fast_qty, "invested_capital": req_fund,
-                    "status": "OPEN", "timeframe": chart_interval, "exit_price": 0.0, "exit_time": "", "pnl": 0.0
+                    "status": "OPEN", "timeframe": chart_interval_desk, "exit_price": 0.0, "exit_time": "", "pnl": 0.0
                 }])
                 save_sheet_trades(pd.concat([sheet_trades_df, row], ignore_index=True))
-                st.success("Sell Filled & Recorded in Google Sheet!")
+                st.success("Sell Filled & Saved to Google Sheet!")
                 st.rerun()
 
     st.markdown("---")
@@ -393,3 +381,86 @@ with desk_right:
                     st.rerun()
     else:
         st.caption("No running positions right now.")
+
+st.markdown("---")
+
+# -------------------------------------------------------------
+# 8. COMPLETE MARKET SCREENER (BREAKOUT / BREAKDOWN / NEUTRAL)
+# -------------------------------------------------------------
+st.markdown(f"### 📋 {selected_universe} - Live Stock Scanner ({chart_interval})")
+
+@st.cache_data(ttl=90)
+def scan_all_universe_assets(asset_list, tf_str):
+    scan_rows = []
+    for asset_name in asset_list:
+        tick = resolve_ticker(asset_name)
+        df = fetch_chart_dataframe(tick, tf_str)
+        if df.empty or len(df) < 20:
+            continue
+        try:
+            c_close = float(df['Close'].iloc[-1])
+            c_open = float(df['Open'].iloc[-1])
+            c_vol = float(df['Volume'].iloc[-1])
+
+            prev_20 = df.iloc[-21:-1]
+            res_level = float(prev_20['High'].max())
+            sup_level = float(prev_20['Low'].min())
+            avg_vol = float(prev_20['Volume'].mean()) or 1.0
+            rvol = round(c_vol / avg_vol, 2) if avg_vol > 0 else 1.0
+
+            atr_s = ta.volatility.average_true_range(df['High'], df['Low'], df['Close'], window=14)
+            atr = float(atr_s.dropna().iloc[-1]) if not atr_s.dropna().empty else (c_close * 0.015)
+
+            rsi_s = ta.momentum.rsi(df['Close'], window=14)
+            rsi = float(rsi_s.dropna().iloc[-1]) if not rsi_s.dropna().empty else 50.0
+
+            ema20 = float(ta.trend.ema_indicator(df['Close'], window=20).dropna().iloc[-1])
+
+            is_special = any(sp in tick for sp in ["=X", "=F", "-USD"]) or ("/" in asset_name)
+            dec = 4 if (is_special and c_close < 20) else 2
+
+            is_buy = (c_close > res_level) and (c_close > c_open) and (c_close > ema20) and (50 <= rsi <= 68)
+            is_sell = (c_close < sup_level) and (c_close < c_open) and (c_close < ema20) and (32 <= rsi <= 50)
+
+            sl_dist = 1.0 * atr
+
+            if is_buy:
+                status_str = "🟢 BUY BREAKOUT"
+                sl_calc = c_close - sl_dist
+                tp1_calc = c_close + (2.0 * sl_dist)
+            elif is_sell:
+                status_str = "🔴 SELL BREAKDOWN"
+                sl_calc = c_close + sl_dist
+                tp1_calc = c_close - (2.0 * sl_dist)
+            else:
+                status_str = "⚪ NEUTRAL"
+                sl_calc = c_close - sl_dist
+                tp1_calc = c_close + (2.0 * sl_dist)
+
+            scan_rows.append({
+                "Asset": asset_name,
+                "Status": status_str,
+                "LTP": round(c_close, dec),
+                "Stop Loss": round(sl_calc, dec),
+                "Target 1 (1:2)": round(tp1_calc, dec),
+                "RSI": round(rsi, 1),
+                "RVol": "Liquid" if is_special else f"{rvol}x"
+            })
+        except Exception:
+            continue
+    return pd.DataFrame(scan_rows)
+
+screener_df = scan_all_universe_assets(tickers_in_univ, chart_interval)
+
+if not screener_df.empty:
+    filter_col1, filter_col2 = st.columns([1.5, 3])
+    with filter_col1:
+        status_filter = st.selectbox("Filter Status:", ["All", "🟢 BUY BREAKOUT", "🔴 SELL BREAKDOWN", "⚪ NEUTRAL"], index=0)
+    
+    filtered_view = screener_df.copy()
+    if status_filter != "All":
+        filtered_view = filtered_view[filtered_view["Status"] == status_filter]
+        
+    st.dataframe(filtered_view, use_container_width=True, hide_index=True)
+else:
+    st.info("Loading scanner data... Please allow a few seconds.")
