@@ -36,7 +36,7 @@ ANGEL_MPIN = get_secret("ANGEL_MPIN")
 ANGEL_TOTP_KEY = get_secret("ANGEL_TOTP_KEY")
 
 # -------------------------------------------------------------
-# 2. GOOGLE SHEETS CLOUD STORAGE (NEVER WIPES OUT)
+# 2. GOOGLE SHEETS CLOUD STORAGE
 # -------------------------------------------------------------
 @st.cache_resource
 def get_sheets_connection():
@@ -70,7 +70,7 @@ def save_sheet_trades(df):
         return False
 
 # -------------------------------------------------------------
-# 3. HELPER FUNCTIONS & TIME
+# 3. HELPER FUNCTIONS & IST TIME CALCULATION
 # -------------------------------------------------------------
 def get_ist_now():
     return datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
@@ -79,6 +79,7 @@ ist_now = get_ist_now()
 today_date_str = ist_now.strftime("%Y-%m-%d")
 time_str = ist_now.strftime("%I:%M:%S %p IST")
 cur_mins = ist_now.hour * 60 + ist_now.minute
+weekday = ist_now.weekday()  # 0: Monday ... 4: Friday, 5: Saturday, 6: Sunday
 
 # -------------------------------------------------------------
 # 4. ROBUST TICKER MAPPINGS (ALL MARKETS)
@@ -107,8 +108,8 @@ MARKET_CATEGORIES = {
         "TATAMOTORS", "MARUTI", "M&M", "HAL", "BEL", "RVNL", "IRFC", "TATASTEEL", "JSWSTEEL",
         "ANGELONE", "BSE", "CDSL", "MCX", "ZOMATO", "TITAN", "ITC", "BHARTIARTL"
     ],
-    "Forex & Commodities": list(FOREX_MAP.keys()),
     "US Equities (NASDAQ/NYSE)": ["AMZN", "GOOGL", "NVDA", "TSLA", "AAPL", "MSFT", "META", "AMD", "NFLX", "PLTR", "AVGO", "SMCI", "COIN", "MSTR"],
+    "Forex & Commodities": list(FOREX_MAP.keys()),
     "Crypto (24x7)": list(CRYPTO_MAP.keys())
 }
 
@@ -145,15 +146,40 @@ def fetch_chart_dataframe(ticker, tf_str):
     return pd.DataFrame()
 
 # -------------------------------------------------------------
-# 5. HEADER & CONTROLS
+# 5. HEADER & AUTOMATIC TIME-BASED MARKET DETECTION
 # -------------------------------------------------------------
 st.title("⚡ SAHI Pro Trading Terminal")
 
 all_market_keys = list(MARKET_CATEGORIES.keys())
+
+# Real-time Market Timing Logic (IST)
+# Weekdays (Mon-Fri)
+if weekday < 5:
+    if 555 <= cur_mins <= 930:  # 09:15 AM to 03:30 PM IST -> NSE
+        auto_market_key = "Indian Equities & Indices (NSE)"
+        active_session_badge = "🟢 NSE LIVE ACTIVE"
+    elif 930 < cur_mins <= 1140:  # 03:30 PM to 07:00 PM IST -> Forex/Commodities
+        auto_market_key = "Forex & Commodities"
+        active_session_badge = "🟡 FOREX / COMMODITIES ACTIVE"
+    elif cur_mins > 1140 or cur_mins <= 120:  # 07:00 PM to 02:00 AM IST -> US Market
+        auto_market_key = "US Equities (NASDAQ/NYSE)"
+        active_session_badge = "🔵 US MARKET LIVE ACTIVE"
+    else:
+        auto_market_key = "Crypto (24x7)"
+        active_session_badge = "🟣 CRYPTO 24x7 ACTIVE"
+else:
+    # Weekends (Sat-Sun)
+    auto_market_key = "Crypto (24x7)"
+    active_session_badge = "🟣 WEEKEND / CRYPTO 24x7 ACTIVE"
+
+default_mkt_index = all_market_keys.index(auto_market_key)
+
+st.caption(f"Status: **{active_session_badge}** | Live IST Time: **{time_str}** | Mode: **Auto Market Switching Active**")
+
 col_mkt, col_tf, col_mode = st.columns([1.8, 1.2, 1.2])
 
 with col_mkt:
-    selected_universe = st.selectbox("🌐 Asset Universe:", all_market_keys, index=0)
+    selected_universe = st.selectbox("🌐 Asset Universe:", all_market_keys, index=default_mkt_index)
 
 with col_tf:
     chart_interval = st.selectbox("⏱️ Timeframe:", ["5m", "15m", "60m", "D"], index=2)
