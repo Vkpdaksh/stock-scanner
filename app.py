@@ -32,46 +32,69 @@ TELEGRAM_BOT_TOKEN = get_secret("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = get_secret("TELEGRAM_CHAT_ID")
 
 # -------------------------------------------------------------
-# 2. GOOGLE SHEETS & LOCAL STORAGE
+# 2. PERMANENT HYBRID STORAGE (JSON FILE + GOOGLE SHEETS)
 # -------------------------------------------------------------
-@st.cache_resource
-def get_sheets_connection():
-    return st.connection("gsheets", type=GSheetsConnection)
+LOCAL_DB_FILE = "trades_db.json"
 
 SHEET_COLUMNS = [
     "id", "date", "asset", "type", "entry", "sl", "tp1", "tp2", 
     "qty", "invested_capital", "status", "timeframe", "exit_price", "exit_time", "pnl", "partial_booked"
 ]
 
-if "local_trades" not in st.session_state:
-    st.session_state.local_trades = []
-
-def load_sheet_trades():
+@st.cache_resource
+def get_sheets_connection():
     try:
-        conn = get_sheets_connection()
-        df = conn.read(ttl="0s")
-        if df is None or df.empty:
-            df = pd.DataFrame(columns=SHEET_COLUMNS)
-        else:
-            for col in SHEET_COLUMNS:
-                if col not in df.columns:
-                    df[col] = None
-            df = df.dropna(how="all")
+        return st.connection("gsheets", type=GSheetsConnection)
     except Exception:
-        df = pd.DataFrame(columns=SHEET_COLUMNS)
+        return None
+
+def load_all_saved_trades():
+    # 1. Pehle local disk JSON se load karein (Zero Refresh Loss)
+    trades_list = []
+    if os.path.exists(LOCAL_DB_FILE):
+        try:
+            with open(LOCAL_DB_FILE, "r") as f:
+                trades_list = json.load(f)
+        except Exception:
+            trades_list = []
+
+    # 2. Agar local file na mile toh Google Sheet fallback dekhein
+    if not trades_list:
+        try:
+            conn = get_sheets_connection()
+            if conn:
+                df = conn.read(ttl="0s")
+                if df is not None and not df.empty:
+                    trades_list = df.dropna(how="all").to_dict(orient="records")
+        except Exception:
+            pass
+
+    if not trades_list:
+        return pd.DataFrame(columns=SHEET_COLUMNS)
     
-    if st.session_state.local_trades:
-        local_df = pd.DataFrame(st.session_state.local_trades)
-        df = pd.concat([df, local_df], ignore_index=True).drop_duplicates(subset=["id"], keep="last")
+    df = pd.DataFrame(trades_list)
+    for col in SHEET_COLUMNS:
+        if col not in df.columns:
+            df[col] = None
     return df
 
-def save_sheet_trades(df):
+def save_all_trades_permanently(df):
+    # 1. Permanent Hard-Write to Server Disk (Refresh par kabhi gayab nahi hoga)
+    try:
+        clean_records = df.to_dict(orient="records")
+        with open(LOCAL_DB_FILE, "w") as f:
+            json.dump(clean_records, f, indent=2, default=str)
+    except Exception:
+        pass
+
+    # 2. Cloud Backup to Google Sheets
     try:
         conn = get_sheets_connection()
-        conn.update(data=df)
-        return True
+        if conn:
+            conn.update(data=df)
     except Exception:
-        return False
+        pass
+    return True
 
 # -------------------------------------------------------------
 # 3. TIME CALCULATION (IST)
@@ -174,7 +197,7 @@ else:
 
 default_mkt_index = all_market_keys.index(auto_market_key)
 
-st.caption(f"Status: **{active_session_badge}** | Live IST: **{time_str}** | Fund Mode: **Active Capital Allocation**")
+st.caption(f"Status: **{active_session_badge}** | Live IST: **{time_str}** | Storage: **Permanent Auto-Save Active**")
 
 col_mkt, col_tf, col_mode = st.columns([1.8, 1.2, 1.2])
 with col_mkt:
@@ -186,13 +209,13 @@ with col_mode:
 
 tickers_in_univ = MARKET_CATEGORIES[selected_universe]
 
-sheet_trades_df = load_sheet_trades()
+# PERMANENT LOAD
+sheet_trades_df = load_all_saved_trades()
 all_trades = sheet_trades_df.to_dict(orient="records") if not sheet_trades_df.empty else []
 open_trades = [t for t in all_trades if str(t.get("status", "")).upper() in ["OPEN", "PARTIAL_BOOKED"]]
 closed_trades = [t for t in all_trades if str(t.get("status", "")).upper() not in ["OPEN", "PARTIAL_BOOKED", ""]]
 
-# REALISTIC CAPITAL & DYNAMIC BLOCKING
-INITIAL_BASE_CAPITAL = 50000.0  # ₹50,000 standard trading pool
+INITIAL_BASE_CAPITAL = 50000.0
 blocked_capital = sum([float(t.get("invested_capital", 0.0) or 0.0) for t in open_trades])
 realized_closed_pnl = sum([float(t.get("pnl", 0.0) or 0.0) for t in closed_trades])
 available_balance = max(0.0, INITIAL_BASE_CAPITAL + realized_closed_pnl - blocked_capital)
@@ -288,7 +311,7 @@ for trade in all_trades:
                     sheet_modified = True
 
 if sheet_modified:
-    save_sheet_trades(sheet_trades_df)
+    save_all_trades_permanently(sheet_trades_df)
     st.rerun()
 
 # -------------------------------------------------------------
@@ -398,7 +421,6 @@ with desk_right:
 
     fast_qty = st.number_input("Lots / Qty:", min_value=1, value=1, step=1)
     
-    # Currency normalized margin in INR
     conversion_rate = 84.0 if is_us else (84.0 if ("=X" in active_ticker or "-USD" in active_ticker) else 1.0)
     req_fund = asset_ltp * fast_qty * conversion_rate
 
@@ -408,7 +430,6 @@ with desk_right:
     with col_tp_b:
         exec_tp = st.number_input("Auto Target (1:2):", value=float(auto_tp_buy), step=step_val, format=dec_fmt)
 
-    # Clean Margin Display
     bal_col1, bal_col2 = st.columns(2)
     with bal_col1:
         st.markdown(f"""
@@ -451,9 +472,9 @@ with desk_right:
                     "pnl": 0.0,
                     "partial_booked": "NO"
                 }
-                st.session_state.local_trades.append(trade_obj)
-                save_sheet_trades(pd.concat([sheet_trades_df, pd.DataFrame([trade_obj])], ignore_index=True))
-                st.toast(f"✅ BUY Order Filled! Blocked ₹{req_fund:,.2f}", icon="🚀")
+                new_df = pd.concat([sheet_trades_df, pd.DataFrame([trade_obj])], ignore_index=True)
+                save_all_trades_permanently(new_df)
+                st.toast(f"✅ BUY Order Filled & Saved! Blocked ₹{req_fund:,.2f}", icon="🚀")
                 st.rerun()
 
     with col_btn2:
@@ -484,9 +505,9 @@ with desk_right:
                     "pnl": 0.0,
                     "partial_booked": "NO"
                 }
-                st.session_state.local_trades.append(trade_obj)
-                save_sheet_trades(pd.concat([sheet_trades_df, pd.DataFrame([trade_obj])], ignore_index=True))
-                st.toast(f"✅ SELL Order Filled! Blocked ₹{req_fund:,.2f}", icon="🚀")
+                new_df = pd.concat([sheet_trades_df, pd.DataFrame([trade_obj])], ignore_index=True)
+                save_all_trades_permanently(new_df)
+                st.toast(f"✅ SELL Order Filled & Saved! Blocked ₹{req_fund:,.2f}", icon="🚀")
                 st.rerun()
 
     st.markdown("---")
@@ -520,8 +541,7 @@ with desk_right:
                     sheet_trades_df.at[idx_l[0], "exit_price"] = c_val
                     sheet_trades_df.at[idx_l[0], "exit_time"] = ist_now.strftime("%Y-%m-%d %H:%M")
                     sheet_trades_df.at[idx_l[0], "pnl"] = float(sheet_trades_df.at[idx_l[0], "pnl"] or 0.0) + live_pnl
-                    save_sheet_trades(sheet_trades_df)
-                st.session_state.local_trades = [x for x in st.session_state.local_trades if x.get("id") != tr.get('id')]
+                    save_all_trades_permanently(sheet_trades_df)
                 st.rerun()
     else:
         st.caption("No running positions right now.")
