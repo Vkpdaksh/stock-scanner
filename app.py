@@ -32,7 +32,7 @@ TELEGRAM_BOT_TOKEN = get_secret("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = get_secret("TELEGRAM_CHAT_ID")
 
 # -------------------------------------------------------------
-# 2. GOOGLE SHEETS CLOUD STORAGE
+# 2. GOOGLE SHEETS CLOUD STORAGE (NEVER WIPES OUT)
 # -------------------------------------------------------------
 @st.cache_resource
 def get_sheets_connection():
@@ -117,7 +117,7 @@ def resolve_ticker(asset_label):
     if asset_label in INDEX_MAP:
         return INDEX_MAP[asset_label]
     
-    clean = asset_label.replace(".NS", "").replace("^", "").strip()
+    clean = str(asset_label).replace(".NS", "").replace("^", "").strip()
     if clean == "INFOSYS":
         return "INFY.NS"
     if clean in MARKET_CATEGORIES["Indian Equities & Indices (NSE)"]:
@@ -148,14 +148,15 @@ st.title("⚡ SAHI Pro Trading Terminal")
 
 all_market_keys = list(MARKET_CATEGORIES.keys())
 
+# Real-time Market Timing Routing
 if weekday < 5:
-    if 555 <= cur_mins <= 930:
+    if 555 <= cur_mins <= 930:        # 09:15 AM - 03:30 PM IST (NSE)
         auto_market_key = "Indian Equities & Indices (NSE)"
         active_session_badge = "🟢 NSE LIVE ACTIVE"
-    elif 930 < cur_mins <= 1140:
+    elif 930 < cur_mins <= 1140:       # 03:30 PM - 07:00 PM IST (Commodities)
         auto_market_key = "Forex & Commodities"
         active_session_badge = "🟡 FOREX / COMMODITIES ACTIVE"
-    elif cur_mins > 1140 or cur_mins <= 120:
+    elif cur_mins > 1140 or cur_mins <= 120:  # 07:00 PM - 02:00 AM IST (US)
         auto_market_key = "US Equities (NASDAQ/NYSE)"
         active_session_badge = "🔵 US MARKET LIVE ACTIVE"
     else:
@@ -167,7 +168,7 @@ else:
 
 default_mkt_index = all_market_keys.index(auto_market_key)
 
-st.caption(f"Status: **{active_session_badge}** | Live IST Time: **{time_str}** | Features: **Auto SL/TP + MTF Sync + Partial Booking**")
+st.caption(f"Status: **{active_session_badge}** | Live IST Time: **{time_str}** | Features: **Auto SL/TP + Trailing to Cost + MTF Sync**")
 
 col_mkt, col_tf, col_mode = st.columns([1.8, 1.2, 1.2])
 
@@ -193,7 +194,7 @@ realized_closed_pnl = sum([float(t.get("pnl", 0.0) or 0.0) for t in closed_trade
 available_balance = INITIAL_BASE_CAPITAL + realized_closed_pnl - blocked_capital
 
 # -------------------------------------------------------------
-# 6. FEATURE 3: PARTIAL PROFIT BOOKING & AUTO TRAILING TO COST
+# 6. AUTO MONITOR: PARTIAL PROFIT & TRAILING SL TO COST
 # -------------------------------------------------------------
 sheet_modified = False
 for trade in all_trades:
@@ -223,7 +224,7 @@ for trade in all_trades:
             row_idx = idx_list[0]
 
             if side_type == "BUY":
-                # Check Target 1 Hit -> Partial 50% Profit Booking
+                # Check Target 1 Hit -> 50% Partial Book
                 if not is_partial and (c_high >= t1_price or c_ltp >= t1_price):
                     booked_qty = max(1, q_total // 2)
                     rem_qty = q_total - booked_qty
@@ -234,7 +235,7 @@ for trade in all_trades:
                     sheet_trades_df.at[row_idx, "pnl"] = float(trade.get("pnl", 0.0) or 0.0) + partial_pnl
                     sheet_trades_df.at[row_idx, "qty"] = rem_qty if rem_qty > 0 else booked_qty
                     sheet_trades_df.at[row_idx, "invested_capital"] = rem_qty * e_price
-                    sheet_trades_df.at[row_idx, "sl"] = e_price  # Stop loss trailed to cost!
+                    sheet_trades_df.at[row_idx, "sl"] = e_price  # Trailed to cost
                     sheet_modified = True
                     continue
 
@@ -296,7 +297,7 @@ if sheet_modified:
     st.rerun()
 
 # -------------------------------------------------------------
-# 7. FEATURE 4: SINGLE-SCREEN TRADING DESK WITH VISUAL SL/TP LINES
+# 7. SINGLE-SCREEN TRADING DESK WITH VISUAL SL/TP LINES
 # -------------------------------------------------------------
 st.markdown("### 🖥️ Single-Screen Trading Desk")
 desk_left, desk_right = st.columns([2.3, 1.2])
@@ -318,7 +319,6 @@ with desk_left:
         c_cur = float(plot_df['Close'].iloc[-1])
         atr_calc = float(ta.volatility.average_true_range(plot_df['High'], plot_df['Low'], plot_df['Close'], window=14).dropna().iloc[-1]) if len(plot_df) >= 15 else (c_cur * 0.01)
 
-        # Check if trade already open for this asset
         open_match = next((t for t in open_trades if t.get("asset") == active_chart_asset), None)
         if open_match:
             chart_sl = float(open_match.get("sl"))
@@ -332,7 +332,6 @@ with desk_left:
             chart_entry = c_cur
 
         fig = go.Figure()
-        # Candlesticks
         fig.add_trace(go.Candlestick(
             x=plot_df.index,
             open=plot_df['Open'],
@@ -347,7 +346,6 @@ with desk_left:
             line=dict(width=1.5)
         ))
 
-        # EMA 20
         fig.add_trace(go.Scatter(
             x=plot_df.index,
             y=plot_df['EMA20'],
@@ -355,22 +353,22 @@ with desk_left:
             name="EMA 20"
         ))
 
-        # Visual SL & TP Reference Lines on Chart
+        # Visual Entry, SL & Target Reference Lines
         fig.add_hline(y=chart_tp1, line_dash="solid", line_color="#00e676", line_width=1.5,
-                      annotation_text=f"Target 1 (1:2): {chart_tp1:.2f}", annotation_position="top right")
+                      annotation_text=f"TP 1 (1:2): {chart_tp1:.2f}", annotation_position="top right")
         fig.add_hline(y=chart_tp2, line_dash="dash", line_color="#00b0ff", line_width=1.5,
-                      annotation_text=f"Target 2 (1:3.5): {chart_tp2:.2f}", annotation_position="top right")
+                      annotation_text=f"TP 2 (1:3.5): {chart_tp2:.2f}", annotation_position="top right")
         fig.add_hline(y=chart_entry, line_dash="dot", line_color="#ffffff", line_width=1.0,
                       annotation_text=f"Entry: {chart_entry:.2f}", annotation_position="bottom right")
         fig.add_hline(y=chart_sl, line_dash="dash", line_color="#ff1744", line_width=1.5,
-                      annotation_text=f"Stop Loss: {chart_sl:.2f}", annotation_position="bottom right")
+                      annotation_text=f"SL: {chart_sl:.2f}", annotation_position="bottom right")
 
         fig.update_layout(
             template="plotly_dark",
-            height=530,
+            height=520,
             margin=dict(l=5, r=60, t=35, b=10),
             xaxis_rangeslider_visible=False,
-            title=f"<b>{active_chart_asset}</b> ({active_ticker}) - Live Levels Chart",
+            title=f"<b>{active_chart_asset}</b> ({active_ticker}) - Live Chart",
             paper_bgcolor="#131722",
             plot_bgcolor="#131722",
             yaxis=dict(side="right", gridcolor="#1e222d"),
@@ -403,7 +401,7 @@ with desk_right:
 
     st.metric(f"{active_chart_asset} Live Price", f"{curr_prefix}{dec_fmt % asset_ltp}")
 
-    fast_qty = st.number_input("Lots / Qty:", min_value=1, value=2, step=1, help="Partial booking splits this qty in 50%")
+    fast_qty = st.number_input("Lots / Qty:", min_value=1, value=2, step=1, help="Quantity must be >=2 for 50% partial exit")
     req_fund = asset_ltp * fast_qty
 
     col_sl_b, col_tp_b = st.columns(2)
@@ -412,47 +410,96 @@ with desk_right:
     with col_tp_b:
         exec_tp = st.number_input("Auto Target (1:2):", value=float(auto_tp_buy), step=step_val, format=dec_fmt)
 
-    st.caption(f"🔒 Required: ₹{req_fund:,.2f} | Balance: ₹{available_balance:,.2f}")
+    # ----------------- HIGH-VISIBILITY BALANCE WIDGET -----------------
+    bal_col1, bal_col2 = st.columns(2)
+    with bal_col1:
+        st.markdown(f"""
+        <div style="background-color: #1a1e29; padding: 6px 10px; border-radius: 6px; border: 1px solid #30363d;">
+            <span style="font-size: 11px; color: #8b949e;">Order Margin</span><br>
+            <b style="font-size: 14px; color: #ffb74d;">₹{req_fund:,.2f}</b>
+        </div>
+        """, unsafe_allow_html=True)
+    with bal_col2:
+        st.markdown(f"""
+        <div style="background-color: #1a1e29; padding: 6px 10px; border-radius: 6px; border: 1px solid #30363d;">
+            <span style="font-size: 11px; color: #8b949e;">Available Funds</span><br>
+            <b style="font-size: 14px; color: #4caf50;">₹{available_balance:,.2f}</b>
+        </div>
+        """, unsafe_allow_html=True)
+    st.write("")
 
     col_btn1, col_btn2 = st.columns(2)
     with col_btn1:
         if st.button("🟢 BUY (Mkt)", use_container_width=True):
-            if req_fund > available_balance:
-                st.error("Insufficient Balance!")
-            else:
-                new_id = int(sheet_trades_df["id"].max() + 1) if not sheet_trades_df.empty and pd.notnull(sheet_trades_df["id"].max()) else 1
-                row = pd.DataFrame([{
-                    "id": new_id, "date": ist_now.strftime("%Y-%m-%d %H:%M"),
-                    "asset": active_chart_asset, "type": "BUY", "entry": asset_ltp,
-                    "sl": exec_sl, "tp1": exec_tp, "tp2": auto_tp2_buy,
-                    "qty": fast_qty, "invested_capital": req_fund,
-                    "status": "OPEN", "timeframe": chart_interval_desk, "exit_price": 0.0, "exit_time": "", "pnl": 0.0,
-                    "partial_booked": "NO"
-                }])
-                save_sheet_trades(pd.concat([sheet_trades_df, row], ignore_index=True))
-                st.success("Buy Filled & Saved to Google Sheet!")
-                st.rerun()
+            if req_fund > available_balance and available_balance > 0:
+                st.warning(f"Low Balance Warning: Margin Req ₹{req_fund:,.2f} > Avail ₹{available_balance:,.2f}.")
+            
+            try:
+                valid_ids = pd.to_numeric(sheet_trades_df["id"], errors="coerce").dropna()
+                new_id = int(valid_ids.max() + 1) if not valid_ids.empty else 1
+            except Exception:
+                new_id = 1
+
+            new_row = pd.DataFrame([{
+                "id": new_id,
+                "date": ist_now.strftime("%Y-%m-%d %H:%M"),
+                "asset": active_chart_asset,
+                "type": "BUY",
+                "entry": float(asset_ltp),
+                "sl": float(exec_sl),
+                "tp1": float(exec_tp),
+                "tp2": float(auto_tp2_buy),
+                "qty": int(fast_qty),
+                "invested_capital": float(req_fund),
+                "status": "OPEN",
+                "timeframe": chart_interval_desk,
+                "exit_price": 0.0,
+                "exit_time": "",
+                "pnl": 0.0,
+                "partial_booked": "NO"
+            }])
+            
+            save_sheet_trades(pd.concat([sheet_trades_df, new_row], ignore_index=True))
+            st.success(f"Buy Executed for {active_chart_asset} at {asset_ltp}!")
+            st.rerun()
 
     with col_btn2:
         if st.button("🔴 SELL (Mkt)", use_container_width=True):
-            if req_fund > available_balance:
-                st.error("Insufficient Balance!")
-            else:
-                auto_sl_sell = round(asset_ltp + sl_dist, 4 if (is_fx and asset_ltp < 20) else 2)
-                auto_tp_sell = round(asset_ltp - (2.0 * sl_dist), 4 if (is_fx and asset_ltp < 20) else 2)
-                auto_tp2_sell = round(asset_ltp - (3.5 * sl_dist), 4 if (is_fx and asset_ltp < 20) else 2)
-                new_id = int(sheet_trades_df["id"].max() + 1) if not sheet_trades_df.empty and pd.notnull(sheet_trades_df["id"].max()) else 1
-                row = pd.DataFrame([{
-                    "id": new_id, "date": ist_now.strftime("%Y-%m-%d %H:%M"),
-                    "asset": active_chart_asset, "type": "SELL", "entry": asset_ltp,
-                    "sl": auto_sl_sell, "tp1": auto_tp_sell, "tp2": auto_tp2_sell,
-                    "qty": fast_qty, "invested_capital": req_fund,
-                    "status": "OPEN", "timeframe": chart_interval_desk, "exit_price": 0.0, "exit_time": "", "pnl": 0.0,
-                    "partial_booked": "NO"
-                }])
-                save_sheet_trades(pd.concat([sheet_trades_df, row], ignore_index=True))
-                st.success("Sell Filled & Saved to Google Sheet!")
-                st.rerun()
+            if req_fund > available_balance and available_balance > 0:
+                st.warning(f"Low Balance Warning: Margin Req ₹{req_fund:,.2f} > Avail ₹{available_balance:,.2f}.")
+
+            try:
+                valid_ids = pd.to_numeric(sheet_trades_df["id"], errors="coerce").dropna()
+                new_id = int(valid_ids.max() + 1) if not valid_ids.empty else 1
+            except Exception:
+                new_id = 1
+
+            auto_sl_sell = round(asset_ltp + sl_dist, 4 if (is_fx and asset_ltp < 20) else 2)
+            auto_tp_sell = round(asset_ltp - (2.0 * sl_dist), 4 if (is_fx and asset_ltp < 20) else 2)
+            auto_tp2_sell = round(asset_ltp - (3.5 * sl_dist), 4 if (is_fx and asset_ltp < 20) else 2)
+
+            new_row = pd.DataFrame([{
+                "id": new_id,
+                "date": ist_now.strftime("%Y-%m-%d %H:%M"),
+                "asset": active_chart_asset,
+                "type": "SELL",
+                "entry": float(asset_ltp),
+                "sl": float(auto_sl_sell),
+                "tp1": float(auto_tp_sell),
+                "tp2": float(auto_tp2_sell),
+                "qty": int(fast_qty),
+                "invested_capital": float(req_fund),
+                "status": "OPEN",
+                "timeframe": chart_interval_desk,
+                "exit_price": 0.0,
+                "exit_time": "",
+                "pnl": 0.0,
+                "partial_booked": "NO"
+            }])
+            
+            save_sheet_trades(pd.concat([sheet_trades_df, new_row], ignore_index=True))
+            st.success(f"Sell Executed for {active_chart_asset} at {asset_ltp}!")
+            st.rerun()
 
     st.markdown("---")
     st.markdown("##### 💼 Live Running Positions")
@@ -477,7 +524,7 @@ with desk_right:
                 <div style="font-size:11px; color:#90caf9;">Qty: {q_val} | Entry: {e_val:.2f} | Status: {st_text}</div>
             </div>
             """, unsafe_allow_html=True)
-            if st.button(f"Exit Full Position #{idx+1}", key=f"fast_exit_{tr.get('id')}", use_container_width=True):
+            if st.button(f"Exit Position #{idx+1}", key=f"fast_exit_{tr.get('id')}", use_container_width=True):
                 idx_l = sheet_trades_df.index[sheet_trades_df["id"] == tr.get('id')].tolist()
                 if idx_l:
                     sheet_trades_df.at[idx_l[0], "status"] = "MANUAL_EXIT"
@@ -492,7 +539,7 @@ with desk_right:
 st.markdown("---")
 
 # -------------------------------------------------------------
-# 8. FEATURE 5: MULTI-TIMEFRAME CONFIRMATION SCREENER (15m + 1h SYNC)
+# 8. MULTI-TIMEFRAME CONFIRMATION SCREENER (15m + 1h SYNC)
 # -------------------------------------------------------------
 st.markdown(f"### 📋 {selected_universe} - Multi-Timeframe Synced Scanner (15m + 1h)")
 
@@ -507,15 +554,12 @@ def scan_mtf_assets(asset_list):
         if df_1h.empty or len(df_1h) < 20 or df_15m.empty or len(df_15m) < 20:
             continue
         try:
-            # 1h Higher Timeframe Trend
             c_1h = float(df_1h['Close'].iloc[-1])
             ema20_1h = float(ta.trend.ema_indicator(df_1h['Close'], window=20).dropna().iloc[-1])
             trend_1h_bullish = c_1h > ema20_1h
             trend_1h_bearish = c_1h < ema20_1h
 
-            # 15m Lower Timeframe Entry Trigger
             c_15m = float(df_15m['Close'].iloc[-1])
-            o_15m = float(df_15m['Open'].iloc[-1])
             c_vol = float(df_15m['Volume'].iloc[-1])
             
             prev_20 = df_15m.iloc[-21:-1]
@@ -532,11 +576,8 @@ def scan_mtf_assets(asset_list):
 
             ema20_15m = float(ta.trend.ema_indicator(df_15m['Close'], window=20).dropna().iloc[-1])
 
-            # Multi-Timeframe Confluence Criteria
             is_buy = (trend_1h_bullish) and (c_15m > res_level) and (c_15m > ema20_15m) and (50 <= rsi <= 68)
             is_sell = (trend_1h_bearish) and (c_15m < sup_level) and (c_15m < ema20_15m) and (32 <= rsi <= 50)
-            
-            # Divergence Detection (False Breakout Protection)
             divergence_warn = (c_15m > res_level and not trend_1h_bullish) or (c_15m < sup_level and not trend_1h_bearish)
 
             is_special = any(sp in tick for sp in ["=X", "=F", "-USD"]) or ("/" in asset_name)
