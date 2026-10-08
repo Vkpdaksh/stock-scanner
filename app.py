@@ -52,22 +52,19 @@ def get_sheets_connection():
 
 def load_all_saved_trades():
     trades_list = []
-    # 1. Try Google Sheets first
     try:
         conn = get_sheets_connection()
         if conn:
             df_cloud = conn.read(worksheet=WORKSHEET_NAME, ttl="0s")
             if df_cloud is not None and not df_cloud.empty:
                 df_cloud = df_cloud.dropna(how="all")
-                # Filter out empty rows where ID is missing
                 if "ID" in df_cloud.columns:
                     df_cloud = df_cloud[df_cloud["ID"].notnull()]
                 if not df_cloud.empty:
                     trades_list = df_cloud.to_dict(orient="records")
-    except Exception as e:
+    except Exception:
         pass
 
-    # 2. Fallback to Local DB if cloud read was empty
     if not trades_list and os.path.exists(LOCAL_DB_FILE):
         try:
             with open(LOCAL_DB_FILE, "r") as f:
@@ -91,19 +88,21 @@ def save_all_trades_permanently(df):
     try:
         with open(LOCAL_DB_FILE, "w") as f:
             json.dump(clean_df.to_dict(orient="records"), f, indent=2, default=str)
-    except Exception:
-        pass
+    except Exception as e:
+        st.warning(f"Local file write note: {e}")
 
-    # 2. Google Sheets Live Write
+    # 2. Google Sheets Live Write with Direct Feedback
     try:
         conn = get_sheets_connection()
-        if conn:
-            conn.update(worksheet=WORKSHEET_NAME, data=clean_df)
-            return True
+        if conn is None:
+            st.error("Google Sheets Connection nahi mila! Streamlit Secrets me credentials check karein.")
+            return False
+        conn.update(worksheet=WORKSHEET_NAME, data=clean_df)
+        st.success("✅ Google Sheet 'Portfolio' me trade update ho gayi!")
+        return True
     except Exception as err:
-        st.error(f"Google Sheet Sync Error: {str(err)}")
+        st.error(f"❌ Google Sheet Write Error: {str(err)}")
         return False
-    return True
 
 # -------------------------------------------------------------
 # 3. TIME CALCULATION (IST)
@@ -206,7 +205,7 @@ else:
 
 default_mkt_index = all_market_keys.index(auto_market_key)
 
-st.caption(f"Status: **{active_session_badge}** | Live IST: **{time_str}** | Sheet Sync: **Trading_Portfolio (Portfolio tab)**")
+st.caption(f"Status: **{active_session_badge}** | Live IST: **{time_str}** | Sheet: **Trading_Portfolio (Portfolio tab)**")
 
 col_mkt, col_tf, col_mode = st.columns([1.8, 1.2, 1.2])
 with col_mkt:
@@ -218,7 +217,6 @@ with col_mode:
 
 tickers_in_univ = MARKET_CATEGORIES[selected_universe]
 
-# LOAD ALL TRADES
 sheet_trades_df = load_all_saved_trades()
 all_trades = sheet_trades_df.to_dict(orient="records") if not sheet_trades_df.empty else []
 open_trades = [t for t in all_trades if str(t.get("Status", "")).upper() in ["OPEN", "PARTIAL_BOOKED"]]
@@ -479,7 +477,6 @@ with desk_right:
                 }
                 new_df = pd.concat([sheet_trades_df, pd.DataFrame([trade_row])], ignore_index=True)
                 save_all_trades_permanently(new_df)
-                st.toast(f"✅ BUY Order Saved to Google Sheet!", icon="🚀")
                 st.rerun()
 
     with col_btn2:
@@ -511,7 +508,6 @@ with desk_right:
                 }
                 new_df = pd.concat([sheet_trades_df, pd.DataFrame([trade_row])], ignore_index=True)
                 save_all_trades_permanently(new_df)
-                st.toast(f"✅ SELL Order Saved to Google Sheet!", icon="🚀")
                 st.rerun()
 
     st.markdown("---")
