@@ -32,13 +32,15 @@ TELEGRAM_BOT_TOKEN = get_secret("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = get_secret("TELEGRAM_CHAT_ID")
 
 # -------------------------------------------------------------
-# 2. PERMANENT HYBRID STORAGE (JSON FILE + GOOGLE SHEETS)
+# 2. EXACT GOOGLE SHEET SYNC (WORKSHEET: Portfolio)
 # -------------------------------------------------------------
 LOCAL_DB_FILE = "trades_db.json"
+WORKSHEET_NAME = "Portfolio"
 
-SHEET_COLUMNS = [
-    "id", "date", "asset", "type", "entry", "sl", "tp1", "tp2", 
-    "qty", "invested_capital", "status", "timeframe", "exit_price", "exit_time", "pnl", "partial_booked"
+# Exact Column Names matching your Google Sheet
+SHEET_COLS = [
+    "ID", "Date", "Asset", "Type", "Entry", "SL", "TP 1 ", " TP2", 
+    "Qty", "Invested Capital", "Status", "Time frame", "Exit Price", "Exit Time", "P n L"
 ]
 
 @st.cache_resource
@@ -49,51 +51,58 @@ def get_sheets_connection():
         return None
 
 def load_all_saved_trades():
-    # 1. Pehle local disk JSON se load karein (Zero Refresh Loss)
     trades_list = []
-    if os.path.exists(LOCAL_DB_FILE):
+    # 1. Try Google Sheets first
+    try:
+        conn = get_sheets_connection()
+        if conn:
+            df_cloud = conn.read(worksheet=WORKSHEET_NAME, ttl="0s")
+            if df_cloud is not None and not df_cloud.empty:
+                df_cloud = df_cloud.dropna(how="all")
+                # Filter out empty rows where ID is missing
+                if "ID" in df_cloud.columns:
+                    df_cloud = df_cloud[df_cloud["ID"].notnull()]
+                if not df_cloud.empty:
+                    trades_list = df_cloud.to_dict(orient="records")
+    except Exception as e:
+        pass
+
+    # 2. Fallback to Local DB if cloud read was empty
+    if not trades_list and os.path.exists(LOCAL_DB_FILE):
         try:
             with open(LOCAL_DB_FILE, "r") as f:
                 trades_list = json.load(f)
         except Exception:
             trades_list = []
 
-    # 2. Agar local file na mile toh Google Sheet fallback dekhein
     if not trades_list:
-        try:
-            conn = get_sheets_connection()
-            if conn:
-                df = conn.read(ttl="0s")
-                if df is not None and not df.empty:
-                    trades_list = df.dropna(how="all").to_dict(orient="records")
-        except Exception:
-            pass
-
-    if not trades_list:
-        return pd.DataFrame(columns=SHEET_COLUMNS)
+        return pd.DataFrame(columns=SHEET_COLS)
     
     df = pd.DataFrame(trades_list)
-    for col in SHEET_COLUMNS:
+    for col in SHEET_COLS:
         if col not in df.columns:
             df[col] = None
     return df
 
 def save_all_trades_permanently(df):
-    # 1. Permanent Hard-Write to Server Disk (Refresh par kabhi gayab nahi hoga)
+    clean_df = df[SHEET_COLS].copy()
+    
+    # 1. Local Disk Backup
     try:
-        clean_records = df.to_dict(orient="records")
         with open(LOCAL_DB_FILE, "w") as f:
-            json.dump(clean_records, f, indent=2, default=str)
+            json.dump(clean_df.to_dict(orient="records"), f, indent=2, default=str)
     except Exception:
         pass
 
-    # 2. Cloud Backup to Google Sheets
+    # 2. Google Sheets Live Write
     try:
         conn = get_sheets_connection()
         if conn:
-            conn.update(data=df)
-    except Exception:
-        pass
+            conn.update(worksheet=WORKSHEET_NAME, data=clean_df)
+            return True
+    except Exception as err:
+        st.error(f"Google Sheet Sync Error: {str(err)}")
+        return False
     return True
 
 # -------------------------------------------------------------
@@ -197,7 +206,7 @@ else:
 
 default_mkt_index = all_market_keys.index(auto_market_key)
 
-st.caption(f"Status: **{active_session_badge}** | Live IST: **{time_str}** | Storage: **Permanent Auto-Save Active**")
+st.caption(f"Status: **{active_session_badge}** | Live IST: **{time_str}** | Sheet Sync: **Trading_Portfolio (Portfolio tab)**")
 
 col_mkt, col_tf, col_mode = st.columns([1.8, 1.2, 1.2])
 with col_mkt:
@@ -209,15 +218,15 @@ with col_mode:
 
 tickers_in_univ = MARKET_CATEGORIES[selected_universe]
 
-# PERMANENT LOAD
+# LOAD ALL TRADES
 sheet_trades_df = load_all_saved_trades()
 all_trades = sheet_trades_df.to_dict(orient="records") if not sheet_trades_df.empty else []
-open_trades = [t for t in all_trades if str(t.get("status", "")).upper() in ["OPEN", "PARTIAL_BOOKED"]]
-closed_trades = [t for t in all_trades if str(t.get("status", "")).upper() not in ["OPEN", "PARTIAL_BOOKED", ""]]
+open_trades = [t for t in all_trades if str(t.get("Status", "")).upper() in ["OPEN", "PARTIAL_BOOKED"]]
+closed_trades = [t for t in all_trades if str(t.get("Status", "")).upper() not in ["OPEN", "PARTIAL_BOOKED", ""]]
 
 INITIAL_BASE_CAPITAL = 50000.0
-blocked_capital = sum([float(t.get("invested_capital", 0.0) or 0.0) for t in open_trades])
-realized_closed_pnl = sum([float(t.get("pnl", 0.0) or 0.0) for t in closed_trades])
+blocked_capital = sum([float(t.get("Invested Capital", 0.0) or 0.0) for t in open_trades])
+realized_closed_pnl = sum([float(t.get("P n L", 0.0) or 0.0) for t in closed_trades])
 available_balance = max(0.0, INITIAL_BASE_CAPITAL + realized_closed_pnl - blocked_capital)
 
 # -------------------------------------------------------------
@@ -225,10 +234,10 @@ available_balance = max(0.0, INITIAL_BASE_CAPITAL + realized_closed_pnl - blocke
 # -------------------------------------------------------------
 sheet_modified = False
 for trade in all_trades:
-    status_curr = str(trade.get("status", "")).upper()
+    status_curr = str(trade.get("Status", "")).upper()
     if status_curr in ["OPEN", "PARTIAL_BOOKED"]:
-        t_id = trade.get("id")
-        a_name = trade.get("asset")
+        t_id = trade.get("ID")
+        a_name = trade.get("Asset")
         resolved_sym = resolve_ticker(a_name)
         df_check = fetch_chart_dataframe(resolved_sym, "60m")
         
@@ -237,77 +246,74 @@ for trade in all_trades:
             c_high = float(df_check['High'].iloc[-1])
             c_low = float(df_check['Low'].iloc[-1])
             
-            e_price = float(trade.get("entry", 0.0))
-            s_price = float(trade.get("sl", 0.0))
-            t1_price = float(trade.get("tp1", 0.0))
-            t2_price = float(trade.get("tp2", 0.0))
-            q_total = int(trade.get("qty", 1))
-            is_partial = str(trade.get("partial_booked", "NO")).upper() == "YES"
-            side_type = str(trade.get("type", "BUY")).upper()
+            e_price = float(trade.get("Entry", 0.0))
+            s_price = float(trade.get("SL", 0.0))
+            t1_price = float(trade.get("TP 1 ", 0.0))
+            t2_price = float(trade.get(" TP2", 0.0))
+            q_total = int(trade.get("Qty", 1))
+            side_type = str(trade.get("Type", "BUY")).upper()
             curr_mult = 84.0 if ("US Equities" in selected_universe or "=X" in resolved_sym) else 1.0
 
-            idx_list = sheet_trades_df.index[sheet_trades_df["id"] == t_id].tolist()
+            idx_list = sheet_trades_df.index[sheet_trades_df["ID"] == t_id].tolist()
             if not idx_list:
                 continue
             row_idx = idx_list[0]
 
             if side_type == "BUY":
-                if not is_partial and (c_high >= t1_price or c_ltp >= t1_price):
+                if status_curr == "OPEN" and (c_high >= t1_price or c_ltp >= t1_price):
                     booked_qty = max(1, q_total // 2)
                     rem_qty = q_total - booked_qty
                     partial_pnl = (t1_price - e_price) * booked_qty * curr_mult
-                    sheet_trades_df.at[row_idx, "status"] = "PARTIAL_BOOKED" if rem_qty > 0 else "TARGET_HIT (1:2)"
-                    sheet_trades_df.at[row_idx, "partial_booked"] = "YES"
-                    sheet_trades_df.at[row_idx, "pnl"] = float(trade.get("pnl", 0.0) or 0.0) + partial_pnl
-                    sheet_trades_df.at[row_idx, "qty"] = rem_qty if rem_qty > 0 else booked_qty
-                    sheet_trades_df.at[row_idx, "invested_capital"] = rem_qty * e_price * curr_mult
-                    sheet_trades_df.at[row_idx, "sl"] = e_price
+                    sheet_trades_df.at[row_idx, "Status"] = "PARTIAL_BOOKED" if rem_qty > 0 else "TARGET_HIT (1:2)"
+                    sheet_trades_df.at[row_idx, "P n L"] = float(trade.get("P n L", 0.0) or 0.0) + partial_pnl
+                    sheet_trades_df.at[row_idx, "Qty"] = rem_qty if rem_qty > 0 else booked_qty
+                    sheet_trades_df.at[row_idx, "Invested Capital"] = rem_qty * e_price * curr_mult
+                    sheet_trades_df.at[row_idx, "SL"] = e_price
                     sheet_modified = True
                     continue
-                elif is_partial and (c_high >= t2_price or c_ltp >= t2_price):
-                    rem_qty = int(sheet_trades_df.at[row_idx, "qty"])
+                elif status_curr == "PARTIAL_BOOKED" and (c_high >= t2_price or c_ltp >= t2_price):
+                    rem_qty = int(sheet_trades_df.at[row_idx, "Qty"])
                     t2_pnl = (t2_price - e_price) * rem_qty * curr_mult
-                    sheet_trades_df.at[row_idx, "status"] = "TARGET_2_HIT (1:3.5)"
-                    sheet_trades_df.at[row_idx, "exit_price"] = t2_price
-                    sheet_trades_df.at[row_idx, "exit_time"] = ist_now.strftime("%Y-%m-%d %H:%M")
-                    sheet_trades_df.at[row_idx, "pnl"] = float(sheet_trades_df.at[row_idx, "pnl"] or 0.0) + t2_pnl
+                    sheet_trades_df.at[row_idx, "Status"] = "TARGET_2_HIT (1:3.5)"
+                    sheet_trades_df.at[row_idx, "Exit Price"] = t2_price
+                    sheet_trades_df.at[row_idx, "Exit Time"] = ist_now.strftime("%Y-%m-%d %H:%M")
+                    sheet_trades_df.at[row_idx, "P n L"] = float(sheet_trades_df.at[row_idx, "P n L"] or 0.0) + t2_pnl
                     sheet_modified = True
                 elif c_low <= s_price or c_ltp <= s_price:
-                    rem_qty = int(sheet_trades_df.at[row_idx, "qty"])
+                    rem_qty = int(sheet_trades_df.at[row_idx, "Qty"])
                     sl_pnl = (s_price - e_price) * rem_qty * curr_mult
-                    sheet_trades_df.at[row_idx, "status"] = "TRAILED_SL_COST" if is_partial else "SL_HIT"
-                    sheet_trades_df.at[row_idx, "exit_price"] = s_price
-                    sheet_trades_df.at[row_idx, "exit_time"] = ist_now.strftime("%Y-%m-%d %H:%M")
-                    sheet_trades_df.at[row_idx, "pnl"] = float(sheet_trades_df.at[row_idx, "pnl"] or 0.0) + sl_pnl
+                    sheet_trades_df.at[row_idx, "Status"] = "TRAILED_SL_COST" if status_curr == "PARTIAL_BOOKED" else "SL_HIT"
+                    sheet_trades_df.at[row_idx, "Exit Price"] = s_price
+                    sheet_trades_df.at[row_idx, "Exit Time"] = ist_now.strftime("%Y-%m-%d %H:%M")
+                    sheet_trades_df.at[row_idx, "P n L"] = float(sheet_trades_df.at[row_idx, "P n L"] or 0.0) + sl_pnl
                     sheet_modified = True
             else:
-                if not is_partial and (c_low <= t1_price or c_ltp <= t1_price):
+                if status_curr == "OPEN" and (c_low <= t1_price or c_ltp <= t1_price):
                     booked_qty = max(1, q_total // 2)
                     rem_qty = q_total - booked_qty
                     partial_pnl = (e_price - t1_price) * booked_qty * curr_mult
-                    sheet_trades_df.at[row_idx, "status"] = "PARTIAL_BOOKED" if rem_qty > 0 else "TARGET_HIT (1:2)"
-                    sheet_trades_df.at[row_idx, "partial_booked"] = "YES"
-                    sheet_trades_df.at[row_idx, "pnl"] = float(trade.get("pnl", 0.0) or 0.0) + partial_pnl
-                    sheet_trades_df.at[row_idx, "qty"] = rem_qty if rem_qty > 0 else booked_qty
-                    sheet_trades_df.at[row_idx, "invested_capital"] = rem_qty * e_price * curr_mult
-                    sheet_trades_df.at[row_idx, "sl"] = e_price
+                    sheet_trades_df.at[row_idx, "Status"] = "PARTIAL_BOOKED" if rem_qty > 0 else "TARGET_HIT (1:2)"
+                    sheet_trades_df.at[row_idx, "P n L"] = float(trade.get("P n L", 0.0) or 0.0) + partial_pnl
+                    sheet_trades_df.at[row_idx, "Qty"] = rem_qty if rem_qty > 0 else booked_qty
+                    sheet_trades_df.at[row_idx, "Invested Capital"] = rem_qty * e_price * curr_mult
+                    sheet_trades_df.at[row_idx, "SL"] = e_price
                     sheet_modified = True
                     continue
-                elif is_partial and (c_low <= t2_price or c_ltp <= t2_price):
-                    rem_qty = int(sheet_trades_df.at[row_idx, "qty"])
+                elif status_curr == "PARTIAL_BOOKED" and (c_low <= t2_price or c_ltp <= t2_price):
+                    rem_qty = int(sheet_trades_df.at[row_idx, "Qty"])
                     t2_pnl = (e_price - t2_price) * rem_qty * curr_mult
-                    sheet_trades_df.at[row_idx, "status"] = "TARGET_2_HIT (1:3.5)"
-                    sheet_trades_df.at[row_idx, "exit_price"] = t2_price
-                    sheet_trades_df.at[row_idx, "exit_time"] = ist_now.strftime("%Y-%m-%d %H:%M")
-                    sheet_trades_df.at[row_idx, "pnl"] = float(sheet_trades_df.at[row_idx, "pnl"] or 0.0) + t2_pnl
+                    sheet_trades_df.at[row_idx, "Status"] = "TARGET_2_HIT (1:3.5)"
+                    sheet_trades_df.at[row_idx, "Exit Price"] = t2_price
+                    sheet_trades_df.at[row_idx, "Exit Time"] = ist_now.strftime("%Y-%m-%d %H:%M")
+                    sheet_trades_df.at[row_idx, "P n L"] = float(sheet_trades_df.at[row_idx, "P n L"] or 0.0) + t2_pnl
                     sheet_modified = True
                 elif c_high >= s_price or c_ltp >= s_price:
-                    rem_qty = int(sheet_trades_df.at[row_idx, "qty"])
+                    rem_qty = int(sheet_trades_df.at[row_idx, "Qty"])
                     sl_pnl = (e_price - s_price) * rem_qty * curr_mult
-                    sheet_trades_df.at[row_idx, "status"] = "TRAILED_SL_COST" if is_partial else "SL_HIT"
-                    sheet_trades_df.at[row_idx, "exit_price"] = s_price
-                    sheet_trades_df.at[row_idx, "exit_time"] = ist_now.strftime("%Y-%m-%d %H:%M")
-                    sheet_trades_df.at[row_idx, "pnl"] = float(sheet_trades_df.at[row_idx, "pnl"] or 0.0) + sl_pnl
+                    sheet_trades_df.at[row_idx, "Status"] = "TRAILED_SL_COST" if status_curr == "PARTIAL_BOOKED" else "SL_HIT"
+                    sheet_trades_df.at[row_idx, "Exit Price"] = s_price
+                    sheet_trades_df.at[row_idx, "Exit Time"] = ist_now.strftime("%Y-%m-%d %H:%M")
+                    sheet_trades_df.at[row_idx, "P n L"] = float(sheet_trades_df.at[row_idx, "P n L"] or 0.0) + sl_pnl
                     sheet_modified = True
 
 if sheet_modified:
@@ -337,12 +343,12 @@ with desk_left:
         c_cur = float(plot_df['Close'].iloc[-1])
         atr_calc = float(ta.volatility.average_true_range(plot_df['High'], plot_df['Low'], plot_df['Close'], window=14).dropna().iloc[-1]) if len(plot_df) >= 15 else (c_cur * 0.01)
 
-        open_match = next((t for t in open_trades if t.get("asset") == active_chart_asset), None)
+        open_match = next((t for t in open_trades if t.get("Asset") == active_chart_asset), None)
         if open_match:
-            chart_sl = float(open_match.get("sl"))
-            chart_tp1 = float(open_match.get("tp1"))
-            chart_tp2 = float(open_match.get("tp2"))
-            chart_entry = float(open_match.get("entry"))
+            chart_sl = float(open_match.get("SL"))
+            chart_tp1 = float(open_match.get("TP 1 "))
+            chart_tp2 = float(open_match.get(" TP2"))
+            chart_entry = float(open_match.get("Entry"))
         else:
             chart_sl = c_cur - (1.0 * atr_calc)
             chart_tp1 = c_cur + (2.0 * atr_calc)
@@ -454,27 +460,26 @@ with desk_right:
                 st.error(f"❌ Margin Shortage! Need ₹{req_fund:,.2f}, have ₹{available_balance:,.2f}")
             else:
                 new_id = int(datetime.now().timestamp())
-                trade_obj = {
-                    "id": new_id,
-                    "date": ist_now.strftime("%Y-%m-%d %H:%M"),
-                    "asset": active_chart_asset,
-                    "type": "BUY",
-                    "entry": float(asset_ltp),
-                    "sl": float(exec_sl),
-                    "tp1": float(exec_tp),
-                    "tp2": float(auto_tp2_buy),
-                    "qty": int(fast_qty),
-                    "invested_capital": float(req_fund),
-                    "status": "OPEN",
-                    "timeframe": chart_interval_desk,
-                    "exit_price": 0.0,
-                    "exit_time": "",
-                    "pnl": 0.0,
-                    "partial_booked": "NO"
+                trade_row = {
+                    "ID": new_id,
+                    "Date": ist_now.strftime("%Y-%m-%d %H:%M"),
+                    "Asset": active_chart_asset,
+                    "Type": "BUY",
+                    "Entry": float(asset_ltp),
+                    "SL": float(exec_sl),
+                    "TP 1 ": float(exec_tp),
+                    " TP2": float(auto_tp2_buy),
+                    "Qty": int(fast_qty),
+                    "Invested Capital": float(req_fund),
+                    "Status": "OPEN",
+                    "Time frame": chart_interval_desk,
+                    "Exit Price": 0.0,
+                    "Exit Time": "",
+                    "P n L": 0.0
                 }
-                new_df = pd.concat([sheet_trades_df, pd.DataFrame([trade_obj])], ignore_index=True)
+                new_df = pd.concat([sheet_trades_df, pd.DataFrame([trade_row])], ignore_index=True)
                 save_all_trades_permanently(new_df)
-                st.toast(f"✅ BUY Order Filled & Saved! Blocked ₹{req_fund:,.2f}", icon="🚀")
+                st.toast(f"✅ BUY Order Saved to Google Sheet!", icon="🚀")
                 st.rerun()
 
     with col_btn2:
@@ -487,60 +492,59 @@ with desk_right:
                 auto_tp_sell = round(asset_ltp - (2.0 * sl_dist), 4 if (is_fx and asset_ltp < 20) else 2)
                 auto_tp2_sell = round(asset_ltp - (3.5 * sl_dist), 4 if (is_fx and asset_ltp < 20) else 2)
 
-                trade_obj = {
-                    "id": new_id,
-                    "date": ist_now.strftime("%Y-%m-%d %H:%M"),
-                    "asset": active_chart_asset,
-                    "type": "SELL",
-                    "entry": float(asset_ltp),
-                    "sl": float(auto_sl_sell),
-                    "tp1": float(auto_tp_sell),
-                    "tp2": float(auto_tp2_sell),
-                    "qty": int(fast_qty),
-                    "invested_capital": float(req_fund),
-                    "status": "OPEN",
-                    "timeframe": chart_interval_desk,
-                    "exit_price": 0.0,
-                    "exit_time": "",
-                    "pnl": 0.0,
-                    "partial_booked": "NO"
+                trade_row = {
+                    "ID": new_id,
+                    "Date": ist_now.strftime("%Y-%m-%d %H:%M"),
+                    "Asset": active_chart_asset,
+                    "Type": "SELL",
+                    "Entry": float(asset_ltp),
+                    "SL": float(auto_sl_sell),
+                    "TP 1 ": float(auto_tp_sell),
+                    " TP2": float(auto_tp2_sell),
+                    "Qty": int(fast_qty),
+                    "Invested Capital": float(req_fund),
+                    "Status": "OPEN",
+                    "Time frame": chart_interval_desk,
+                    "Exit Price": 0.0,
+                    "Exit Time": "",
+                    "P n L": 0.0
                 }
-                new_df = pd.concat([sheet_trades_df, pd.DataFrame([trade_obj])], ignore_index=True)
+                new_df = pd.concat([sheet_trades_df, pd.DataFrame([trade_row])], ignore_index=True)
                 save_all_trades_permanently(new_df)
-                st.toast(f"✅ SELL Order Filled & Saved! Blocked ₹{req_fund:,.2f}", icon="🚀")
+                st.toast(f"✅ SELL Order Saved to Google Sheet!", icon="🚀")
                 st.rerun()
 
     st.markdown("---")
     st.markdown(f"##### 💼 Live Running Positions (Locked: ₹{blocked_capital:,.2f})")
     if open_trades:
         for idx, tr in enumerate(open_trades):
-            raw_pos_sym = resolve_ticker(tr.get('asset'))
+            raw_pos_sym = resolve_ticker(tr.get('Asset'))
             df_pos = fetch_chart_dataframe(raw_pos_sym, "60m")
-            c_val = float(df_pos['Close'].iloc[-1]) if not df_pos.empty else float(tr.get('entry'))
-            e_val = float(tr.get('entry'))
-            q_val = int(tr.get('qty'))
-            is_buy = str(tr.get('type')).upper() == "BUY"
+            c_val = float(df_pos['Close'].iloc[-1]) if not df_pos.empty else float(tr.get('Entry'))
+            e_val = float(tr.get('Entry'))
+            q_val = int(tr.get('Qty'))
+            is_buy = str(tr.get('Type')).upper() == "BUY"
             mult_val = 84.0 if ("US Equities" in selected_universe or "=X" in raw_pos_sym) else 1.0
             live_pnl = ((c_val - e_val) if is_buy else (e_val - c_val)) * q_val * mult_val
             pnl_c = "#2e7d32" if live_pnl >= 0 else "#c62828"
-            st_text = tr.get("status")
+            st_text = tr.get("Status")
 
             st.markdown(f"""
             <div style="background-color: #1a1e29; padding: 8px; border-radius: 5px; margin-bottom: 6px; border-left: 4px solid {pnl_c};">
                 <div style="display:flex; justify-content:space-between;">
-                    <b>{tr.get('asset')} ({tr.get('type')})</b>
+                    <b>{tr.get('Asset')} ({tr.get('Type')})</b>
                     <span style="color:{pnl_c}; font-weight:bold;">₹{live_pnl:+,.2f}</span>
                 </div>
-                <div style="font-size:11px; color:#90caf9;">Qty: {q_val} | Entry: {e_val:.2f} | Locked: ₹{float(tr.get('invested_capital', 0)):,.2f}</div>
+                <div style="font-size:11px; color:#90caf9;">Qty: {q_val} | Entry: {e_val:.2f} | Locked: ₹{float(tr.get('Invested Capital', 0)):,.2f}</div>
             </div>
             """, unsafe_allow_html=True)
-            if st.button(f"Exit Position #{idx+1}", key=f"fast_exit_{tr.get('id')}", use_container_width=True):
-                idx_l = sheet_trades_df.index[sheet_trades_df["id"] == tr.get('id')].tolist()
+            if st.button(f"Exit Position #{idx+1}", key=f"fast_exit_{tr.get('ID')}", use_container_width=True):
+                idx_l = sheet_trades_df.index[sheet_trades_df["ID"] == tr.get('ID')].tolist()
                 if idx_l:
-                    sheet_trades_df.at[idx_l[0], "status"] = "MANUAL_EXIT"
-                    sheet_trades_df.at[idx_l[0], "exit_price"] = c_val
-                    sheet_trades_df.at[idx_l[0], "exit_time"] = ist_now.strftime("%Y-%m-%d %H:%M")
-                    sheet_trades_df.at[idx_l[0], "pnl"] = float(sheet_trades_df.at[idx_l[0], "pnl"] or 0.0) + live_pnl
+                    sheet_trades_df.at[idx_l[0], "Status"] = "MANUAL_EXIT"
+                    sheet_trades_df.at[idx_l[0], "Exit Price"] = c_val
+                    sheet_trades_df.at[idx_l[0], "Exit Time"] = ist_now.strftime("%Y-%m-%d %H:%M")
+                    sheet_trades_df.at[idx_l[0], "P n L"] = float(sheet_trades_df.at[idx_l[0], "P n L"] or 0.0) + live_pnl
                     save_all_trades_permanently(sheet_trades_df)
                 st.rerun()
     else:
