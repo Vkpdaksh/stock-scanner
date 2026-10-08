@@ -9,7 +9,6 @@ import yfinance as yf
 import ta
 import plotly.graph_objects as go
 from datetime import datetime, timezone, timedelta
-from streamlit_gsheets import GSheetsConnection
 
 # -------------------------------------------------------------
 # 1. PAGE SETUP & CONFIG
@@ -19,6 +18,9 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed"
 )
+
+# YOUR ACTIVE GOOGLE APPS SCRIPT WEBHOOK URL
+GSHEET_WEBHOOK_URL = "https://script.google.com/macros/s/AKfycbzUMMXUBRhKvwZchXVfpcUPoX1T1MPt3otPak6b-k-wvsrFEhnttziGyQi__5MqSDcE/exec"
 
 def get_secret(key_name):
     try:
@@ -32,40 +34,18 @@ TELEGRAM_BOT_TOKEN = get_secret("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = get_secret("TELEGRAM_CHAT_ID")
 
 # -------------------------------------------------------------
-# 2. EXACT GOOGLE SHEET SYNC (WORKSHEET: Portfolio)
+# 2. PERMANENT HYBRID STORAGE (JSON + DIRECT WEBHOOK)
 # -------------------------------------------------------------
 LOCAL_DB_FILE = "trades_db.json"
-WORKSHEET_NAME = "Portfolio"
 
-# Exact Column Names matching your Google Sheet
 SHEET_COLS = [
     "ID", "Date", "Asset", "Type", "Entry", "SL", "TP 1 ", " TP2", 
     "Qty", "Invested Capital", "Status", "Time frame", "Exit Price", "Exit Time", "P n L"
 ]
 
-@st.cache_resource
-def get_sheets_connection():
-    try:
-        return st.connection("gsheets", type=GSheetsConnection)
-    except Exception:
-        return None
-
 def load_all_saved_trades():
     trades_list = []
-    try:
-        conn = get_sheets_connection()
-        if conn:
-            df_cloud = conn.read(worksheet=WORKSHEET_NAME, ttl="0s")
-            if df_cloud is not None and not df_cloud.empty:
-                df_cloud = df_cloud.dropna(how="all")
-                if "ID" in df_cloud.columns:
-                    df_cloud = df_cloud[df_cloud["ID"].notnull()]
-                if not df_cloud.empty:
-                    trades_list = df_cloud.to_dict(orient="records")
-    except Exception:
-        pass
-
-    if not trades_list and os.path.exists(LOCAL_DB_FILE):
+    if os.path.exists(LOCAL_DB_FILE):
         try:
             with open(LOCAL_DB_FILE, "r") as f:
                 trades_list = json.load(f)
@@ -83,25 +63,25 @@ def load_all_saved_trades():
 
 def save_all_trades_permanently(df):
     clean_df = df[SHEET_COLS].copy()
-    
-    # 1. Local Disk Backup
     try:
         with open(LOCAL_DB_FILE, "w") as f:
             json.dump(clean_df.to_dict(orient="records"), f, indent=2, default=str)
-    except Exception as e:
-        st.warning(f"Local file write note: {e}")
+    except Exception:
+        pass
+    return True
 
-    # 2. Google Sheets Live Write with Direct Feedback
+def push_trade_to_google_sheet(trade_data):
+    """Direct Webhook POST - Instant append in Google Sheet"""
     try:
-        conn = get_sheets_connection()
-        if conn is None:
-            st.error("Google Sheets Connection nahi mila! Streamlit Secrets me credentials check karein.")
-            return False
-        conn.update(worksheet=WORKSHEET_NAME, data=clean_df)
-        st.success("✅ Google Sheet 'Portfolio' me trade update ho gayi!")
-        return True
-    except Exception as err:
-        st.error(f"❌ Google Sheet Write Error: {str(err)}")
+        json_payload = json.dumps(trade_data).encode("utf-8")
+        req = urllib.request.Request(
+            GSHEET_WEBHOOK_URL,
+            data=json_payload,
+            headers={"Content-Type": "application/json"}
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return resp.status in [200, 302]
+    except Exception as e:
         return False
 
 # -------------------------------------------------------------
@@ -180,7 +160,7 @@ def fetch_chart_dataframe(ticker, tf_str):
     return pd.DataFrame()
 
 # -------------------------------------------------------------
-# 5. HEADER & TIME ROUTING
+# 5. HEADER & AUTO SESSION ROUTING
 # -------------------------------------------------------------
 st.title("⚡ SAHI Pro Trading Terminal")
 
@@ -205,7 +185,7 @@ else:
 
 default_mkt_index = all_market_keys.index(auto_market_key)
 
-st.caption(f"Status: **{active_session_badge}** | Live IST: **{time_str}** | Sheet: **Trading_Portfolio (Portfolio tab)**")
+st.caption(f"Status: **{active_session_badge}** | Live IST: **{time_str}** | Webhook: **Google Apps Script Connected**")
 
 col_mkt, col_tf, col_mode = st.columns([1.8, 1.2, 1.2])
 with col_mkt:
@@ -477,6 +457,8 @@ with desk_right:
                 }
                 new_df = pd.concat([sheet_trades_df, pd.DataFrame([trade_row])], ignore_index=True)
                 save_all_trades_permanently(new_df)
+                push_trade_to_google_sheet(trade_row)
+                st.toast("✅ Trade Saved to Google Sheet via Webhook!", icon="🚀")
                 st.rerun()
 
     with col_btn2:
@@ -508,6 +490,8 @@ with desk_right:
                 }
                 new_df = pd.concat([sheet_trades_df, pd.DataFrame([trade_row])], ignore_index=True)
                 save_all_trades_permanently(new_df)
+                push_trade_to_google_sheet(trade_row)
+                st.toast("✅ Trade Saved to Google Sheet via Webhook!", icon="🚀")
                 st.rerun()
 
     st.markdown("---")
