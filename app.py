@@ -1,7 +1,6 @@
 import os
 import json
-import urllib.request
-import urllib.parse
+import requests
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -23,7 +22,7 @@ st.set_page_config(
 # -------------------------------------------------------------
 # ⚠️ APNA GOOGLE APPS SCRIPT WEB APP URL YAHAN PASTE KAREIN:
 # -------------------------------------------------------------
-WEB_APP_URL = "YAHAN_APNA_WEB_APP_URL_PASTE_KAREIN"
+WEB_APP_URL = "https://script.google.com/macros/s/AKfycbx..."  # <-- Replace with your exact URL
 
 def get_secret(key_name):
     try:
@@ -37,7 +36,7 @@ TELEGRAM_BOT_TOKEN = get_secret("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = get_secret("TELEGRAM_CHAT_ID")
 
 # -------------------------------------------------------------
-# 2. HYBRID STORAGE (WEBHOOK + LOCAL DISK BACKUP)
+# 2. HYBRID STORAGE (ROBUST REDIRECT-FOLLOWING WEBHOOK)
 # -------------------------------------------------------------
 LOCAL_DB_FILE = "trades_db.json"
 WORKSHEET_NAME = "Portfolio"
@@ -55,20 +54,24 @@ def get_sheets_connection():
         return None
 
 def send_to_google_sheet_webhook(payload_dict):
-    """Direct Web App Webhook POST for 100% Reliable Sync"""
-    if not WEB_APP_URL or "YAHAN_APNA" in WEB_APP_URL:
+    """Sends payload following Google 302 redirects properly"""
+    if not WEB_APP_URL or "AKfycbx..." in WEB_APP_URL:
+        st.warning("⚠️ Web App URL paste nahi kiya gaya hai line 28 par!")
         return False
     try:
-        req_data = json.dumps(payload_dict).encode("utf-8")
-        req = urllib.request.Request(
+        res = requests.post(
             WEB_APP_URL,
-            data=req_data,
-            headers={"Content-Type": "application/json"},
-            method="POST"
+            json=payload_dict,
+            timeout=12,
+            allow_redirects=True
         )
-        with urllib.request.urlopen(req, timeout=8) as response:
-            return response.status == 200
-    except Exception:
+        if res.status_code == 200:
+            return True
+        else:
+            st.error(f"Google Script Response Code: {res.status_code}")
+            return False
+    except Exception as err:
+        st.error(f"Webhook Transfer Error: {str(err)}")
         return False
 
 def load_all_saved_trades():
@@ -107,21 +110,21 @@ def load_all_saved_trades():
 def save_all_trades_permanently(df):
     clean_df = df[SHEET_COLS].copy()
     
-    # 1. Server disk par hard write (Refresh loss se bachata hai)
+    # 1. Local Disk write (Instant UI preservation)
     try:
         with open(LOCAL_DB_FILE, "w") as f:
             json.dump(clean_df.to_dict(orient="records"), f, indent=2, default=str)
     except Exception:
         pass
 
-    # 2. Webhook se full portfolio table sheet me sync karein
+    # 2. Webhook Sync
     formatted_rows = clean_df.values.tolist()
     send_to_google_sheet_webhook({
         "action": "UPDATE_FULL",
         "rows": formatted_rows
     })
 
-    # 3. Connection update backup
+    # 3. Connection backup
     try:
         conn = get_sheets_connection()
         if conn:
@@ -254,7 +257,7 @@ realized_closed_pnl = sum([float(t.get("P n L", 0.0) or 0.0) for t in closed_tra
 available_balance = max(0.0, INITIAL_BASE_CAPITAL + realized_closed_pnl - blocked_capital)
 
 # -------------------------------------------------------------
-# 6. AUTO SL & TARGET MONITOR ENGINE (SYNC WITH PROFIT)
+# 6. AUTO SL & TARGET MONITOR ENGINE
 # -------------------------------------------------------------
 sheet_modified = False
 for trade in all_trades:
@@ -502,11 +505,11 @@ with desk_right:
                     "Exit Time": "",
                     "P n L": 0.0
                 }
-                # Direct Webhook Sync
-                send_to_google_sheet_webhook(trade_row)
+                ok = send_to_google_sheet_webhook(trade_row)
                 new_df = pd.concat([sheet_trades_df, pd.DataFrame([trade_row])], ignore_index=True)
                 save_all_trades_permanently(new_df)
-                st.toast(f"✅ BUY Order Saved to Google Sheet!", icon="🚀")
+                if ok:
+                    st.toast("✅ BUY Order Synced to Google Sheet!", icon="🚀")
                 st.rerun()
 
     with col_btn2:
@@ -537,10 +540,11 @@ with desk_right:
                     "Exit Time": "",
                     "P n L": 0.0
                 }
-                send_to_google_sheet_webhook(trade_row)
+                ok = send_to_google_sheet_webhook(trade_row)
                 new_df = pd.concat([sheet_trades_df, pd.DataFrame([trade_row])], ignore_index=True)
                 save_all_trades_permanently(new_df)
-                st.toast(f"✅ SELL Order Saved to Google Sheet!", icon="🚀")
+                if ok:
+                    st.toast("✅ SELL Order Synced to Google Sheet!", icon="🚀")
                 st.rerun()
 
     st.markdown("---")
@@ -568,7 +572,6 @@ with desk_right:
             </div>
             """, unsafe_allow_html=True)
             
-            # EXIT BUTTON: Profit Sheet me update karega
             if st.button(f"Exit Position #{idx+1} (Book PnL)", key=f"fast_exit_{tr.get('ID')}", use_container_width=True):
                 idx_l = sheet_trades_df.index[sheet_trades_df["ID"] == tr.get('ID')].tolist()
                 if idx_l:
