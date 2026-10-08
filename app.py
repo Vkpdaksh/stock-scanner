@@ -9,6 +9,7 @@ import yfinance as yf
 import ta
 import plotly.graph_objects as go
 from datetime import datetime, timezone, timedelta
+from streamlit_gsheets import GSheetsConnection
 
 # -------------------------------------------------------------
 # 1. PAGE SETUP & CONFIG
@@ -19,8 +20,10 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# YOUR ACTIVE GOOGLE APPS SCRIPT WEBHOOK URL
-GSHEET_WEBHOOK_URL = "https://script.google.com/macros/s/AKfycbzUMMXUBRhKvwZchXVfpcUPoX1T1MPt3otPak6b-k-wvsrFEhnttziGyQi__5MqSDcE/exec"
+# -------------------------------------------------------------
+# ⚠️ APNA GOOGLE APPS SCRIPT WEB APP URL YAHAN PASTE KAREIN:
+# -------------------------------------------------------------
+WEB_APP_URL = "YAHAN_APNA_WEB_APP_URL_PASTE_KAREIN"
 
 def get_secret(key_name):
     try:
@@ -34,18 +37,58 @@ TELEGRAM_BOT_TOKEN = get_secret("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = get_secret("TELEGRAM_CHAT_ID")
 
 # -------------------------------------------------------------
-# 2. PERMANENT HYBRID STORAGE (JSON + DIRECT WEBHOOK)
+# 2. HYBRID STORAGE (WEBHOOK + LOCAL DISK BACKUP)
 # -------------------------------------------------------------
 LOCAL_DB_FILE = "trades_db.json"
+WORKSHEET_NAME = "Portfolio"
 
 SHEET_COLS = [
     "ID", "Date", "Asset", "Type", "Entry", "SL", "TP 1 ", " TP2", 
     "Qty", "Invested Capital", "Status", "Time frame", "Exit Price", "Exit Time", "P n L"
 ]
 
+@st.cache_resource
+def get_sheets_connection():
+    try:
+        return st.connection("gsheets", type=GSheetsConnection)
+    except Exception:
+        return None
+
+def send_to_google_sheet_webhook(payload_dict):
+    """Direct Web App Webhook POST for 100% Reliable Sync"""
+    if not WEB_APP_URL or "YAHAN_APNA" in WEB_APP_URL:
+        return False
+    try:
+        req_data = json.dumps(payload_dict).encode("utf-8")
+        req = urllib.request.Request(
+            WEB_APP_URL,
+            data=req_data,
+            headers={"Content-Type": "application/json"},
+            method="POST"
+        )
+        with urllib.request.urlopen(req, timeout=8) as response:
+            return response.status == 200
+    except Exception:
+        return False
+
 def load_all_saved_trades():
     trades_list = []
-    if os.path.exists(LOCAL_DB_FILE):
+    # 1. Sheet connection se read karein
+    try:
+        conn = get_sheets_connection()
+        if conn:
+            df_cloud = conn.read(worksheet=WORKSHEET_NAME, ttl="0s")
+            if df_cloud is not None and not df_cloud.empty:
+                df_cloud = df_cloud.dropna(how="all")
+                if "ID" in df_cloud.columns:
+                    df_cloud = df_cloud[df_cloud["ID"].notnull()]
+                if not df_cloud.empty:
+                    trades_list = df_cloud.to_dict(orient="records")
+    except Exception:
+        pass
+
+    # 2. Local disk backup fallback
+    if not trades_list and os.path.exists(LOCAL_DB_FILE):
         try:
             with open(LOCAL_DB_FILE, "r") as f:
                 trades_list = json.load(f)
@@ -63,26 +106,29 @@ def load_all_saved_trades():
 
 def save_all_trades_permanently(df):
     clean_df = df[SHEET_COLS].copy()
+    
+    # 1. Server disk par hard write (Refresh loss se bachata hai)
     try:
         with open(LOCAL_DB_FILE, "w") as f:
             json.dump(clean_df.to_dict(orient="records"), f, indent=2, default=str)
     except Exception:
         pass
-    return True
 
-def push_trade_to_google_sheet(trade_data):
-    """Direct Webhook POST - Instant append in Google Sheet"""
+    # 2. Webhook se full portfolio table sheet me sync karein
+    formatted_rows = clean_df.values.tolist()
+    send_to_google_sheet_webhook({
+        "action": "UPDATE_FULL",
+        "rows": formatted_rows
+    })
+
+    # 3. Connection update backup
     try:
-        json_payload = json.dumps(trade_data).encode("utf-8")
-        req = urllib.request.Request(
-            GSHEET_WEBHOOK_URL,
-            data=json_payload,
-            headers={"Content-Type": "application/json"}
-        )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            return resp.status in [200, 302]
-    except Exception as e:
-        return False
+        conn = get_sheets_connection()
+        if conn:
+            conn.update(worksheet=WORKSHEET_NAME, data=clean_df)
+    except Exception:
+        pass
+    return True
 
 # -------------------------------------------------------------
 # 3. TIME CALCULATION (IST)
@@ -160,7 +206,7 @@ def fetch_chart_dataframe(ticker, tf_str):
     return pd.DataFrame()
 
 # -------------------------------------------------------------
-# 5. HEADER & AUTO SESSION ROUTING
+# 5. HEADER & TIME ROUTING
 # -------------------------------------------------------------
 st.title("⚡ SAHI Pro Trading Terminal")
 
@@ -185,7 +231,7 @@ else:
 
 default_mkt_index = all_market_keys.index(auto_market_key)
 
-st.caption(f"Status: **{active_session_badge}** | Live IST: **{time_str}** | Webhook: **Google Apps Script Connected**")
+st.caption(f"Status: **{active_session_badge}** | Live IST: **{time_str}** | Webhook: **Real-Time P&L Active**")
 
 col_mkt, col_tf, col_mode = st.columns([1.8, 1.2, 1.2])
 with col_mkt:
@@ -208,7 +254,7 @@ realized_closed_pnl = sum([float(t.get("P n L", 0.0) or 0.0) for t in closed_tra
 available_balance = max(0.0, INITIAL_BASE_CAPITAL + realized_closed_pnl - blocked_capital)
 
 # -------------------------------------------------------------
-# 6. AUTO SL & TARGET MONITOR ENGINE
+# 6. AUTO SL & TARGET MONITOR ENGINE (SYNC WITH PROFIT)
 # -------------------------------------------------------------
 sheet_modified = False
 for trade in all_trades:
@@ -243,7 +289,7 @@ for trade in all_trades:
                     rem_qty = q_total - booked_qty
                     partial_pnl = (t1_price - e_price) * booked_qty * curr_mult
                     sheet_trades_df.at[row_idx, "Status"] = "PARTIAL_BOOKED" if rem_qty > 0 else "TARGET_HIT (1:2)"
-                    sheet_trades_df.at[row_idx, "P n L"] = float(trade.get("P n L", 0.0) or 0.0) + partial_pnl
+                    sheet_trades_df.at[row_idx, "P n L"] = float(trade.get("P n L", 0.0) or 0.0) + round(partial_pnl, 2)
                     sheet_trades_df.at[row_idx, "Qty"] = rem_qty if rem_qty > 0 else booked_qty
                     sheet_trades_df.at[row_idx, "Invested Capital"] = rem_qty * e_price * curr_mult
                     sheet_trades_df.at[row_idx, "SL"] = e_price
@@ -255,7 +301,7 @@ for trade in all_trades:
                     sheet_trades_df.at[row_idx, "Status"] = "TARGET_2_HIT (1:3.5)"
                     sheet_trades_df.at[row_idx, "Exit Price"] = t2_price
                     sheet_trades_df.at[row_idx, "Exit Time"] = ist_now.strftime("%Y-%m-%d %H:%M")
-                    sheet_trades_df.at[row_idx, "P n L"] = float(sheet_trades_df.at[row_idx, "P n L"] or 0.0) + t2_pnl
+                    sheet_trades_df.at[row_idx, "P n L"] = float(sheet_trades_df.at[row_idx, "P n L"] or 0.0) + round(t2_pnl, 2)
                     sheet_modified = True
                 elif c_low <= s_price or c_ltp <= s_price:
                     rem_qty = int(sheet_trades_df.at[row_idx, "Qty"])
@@ -263,7 +309,7 @@ for trade in all_trades:
                     sheet_trades_df.at[row_idx, "Status"] = "TRAILED_SL_COST" if status_curr == "PARTIAL_BOOKED" else "SL_HIT"
                     sheet_trades_df.at[row_idx, "Exit Price"] = s_price
                     sheet_trades_df.at[row_idx, "Exit Time"] = ist_now.strftime("%Y-%m-%d %H:%M")
-                    sheet_trades_df.at[row_idx, "P n L"] = float(sheet_trades_df.at[row_idx, "P n L"] or 0.0) + sl_pnl
+                    sheet_trades_df.at[row_idx, "P n L"] = float(sheet_trades_df.at[row_idx, "P n L"] or 0.0) + round(sl_pnl, 2)
                     sheet_modified = True
             else:
                 if status_curr == "OPEN" and (c_low <= t1_price or c_ltp <= t1_price):
@@ -271,7 +317,7 @@ for trade in all_trades:
                     rem_qty = q_total - booked_qty
                     partial_pnl = (e_price - t1_price) * booked_qty * curr_mult
                     sheet_trades_df.at[row_idx, "Status"] = "PARTIAL_BOOKED" if rem_qty > 0 else "TARGET_HIT (1:2)"
-                    sheet_trades_df.at[row_idx, "P n L"] = float(trade.get("P n L", 0.0) or 0.0) + partial_pnl
+                    sheet_trades_df.at[row_idx, "P n L"] = float(trade.get("P n L", 0.0) or 0.0) + round(partial_pnl, 2)
                     sheet_trades_df.at[row_idx, "Qty"] = rem_qty if rem_qty > 0 else booked_qty
                     sheet_trades_df.at[row_idx, "Invested Capital"] = rem_qty * e_price * curr_mult
                     sheet_trades_df.at[row_idx, "SL"] = e_price
@@ -283,7 +329,7 @@ for trade in all_trades:
                     sheet_trades_df.at[row_idx, "Status"] = "TARGET_2_HIT (1:3.5)"
                     sheet_trades_df.at[row_idx, "Exit Price"] = t2_price
                     sheet_trades_df.at[row_idx, "Exit Time"] = ist_now.strftime("%Y-%m-%d %H:%M")
-                    sheet_trades_df.at[row_idx, "P n L"] = float(sheet_trades_df.at[row_idx, "P n L"] or 0.0) + t2_pnl
+                    sheet_trades_df.at[row_idx, "P n L"] = float(sheet_trades_df.at[row_idx, "P n L"] or 0.0) + round(t2_pnl, 2)
                     sheet_modified = True
                 elif c_high >= s_price or c_ltp >= s_price:
                     rem_qty = int(sheet_trades_df.at[row_idx, "Qty"])
@@ -291,7 +337,7 @@ for trade in all_trades:
                     sheet_trades_df.at[row_idx, "Status"] = "TRAILED_SL_COST" if status_curr == "PARTIAL_BOOKED" else "SL_HIT"
                     sheet_trades_df.at[row_idx, "Exit Price"] = s_price
                     sheet_trades_df.at[row_idx, "Exit Time"] = ist_now.strftime("%Y-%m-%d %H:%M")
-                    sheet_trades_df.at[row_idx, "P n L"] = float(sheet_trades_df.at[row_idx, "P n L"] or 0.0) + sl_pnl
+                    sheet_trades_df.at[row_idx, "P n L"] = float(sheet_trades_df.at[row_idx, "P n L"] or 0.0) + round(sl_pnl, 2)
                     sheet_modified = True
 
 if sheet_modified:
@@ -439,6 +485,7 @@ with desk_right:
             else:
                 new_id = int(datetime.now().timestamp())
                 trade_row = {
+                    "action": "APPEND",
                     "ID": new_id,
                     "Date": ist_now.strftime("%Y-%m-%d %H:%M"),
                     "Asset": active_chart_asset,
@@ -455,10 +502,11 @@ with desk_right:
                     "Exit Time": "",
                     "P n L": 0.0
                 }
+                # Direct Webhook Sync
+                send_to_google_sheet_webhook(trade_row)
                 new_df = pd.concat([sheet_trades_df, pd.DataFrame([trade_row])], ignore_index=True)
                 save_all_trades_permanently(new_df)
-                push_trade_to_google_sheet(trade_row)
-                st.toast("✅ Trade Saved to Google Sheet via Webhook!", icon="🚀")
+                st.toast(f"✅ BUY Order Saved to Google Sheet!", icon="🚀")
                 st.rerun()
 
     with col_btn2:
@@ -472,6 +520,7 @@ with desk_right:
                 auto_tp2_sell = round(asset_ltp - (3.5 * sl_dist), 4 if (is_fx and asset_ltp < 20) else 2)
 
                 trade_row = {
+                    "action": "APPEND",
                     "ID": new_id,
                     "Date": ist_now.strftime("%Y-%m-%d %H:%M"),
                     "Asset": active_chart_asset,
@@ -488,10 +537,10 @@ with desk_right:
                     "Exit Time": "",
                     "P n L": 0.0
                 }
+                send_to_google_sheet_webhook(trade_row)
                 new_df = pd.concat([sheet_trades_df, pd.DataFrame([trade_row])], ignore_index=True)
                 save_all_trades_permanently(new_df)
-                push_trade_to_google_sheet(trade_row)
-                st.toast("✅ Trade Saved to Google Sheet via Webhook!", icon="🚀")
+                st.toast(f"✅ SELL Order Saved to Google Sheet!", icon="🚀")
                 st.rerun()
 
     st.markdown("---")
@@ -518,14 +567,17 @@ with desk_right:
                 <div style="font-size:11px; color:#90caf9;">Qty: {q_val} | Entry: {e_val:.2f} | Locked: ₹{float(tr.get('Invested Capital', 0)):,.2f}</div>
             </div>
             """, unsafe_allow_html=True)
-            if st.button(f"Exit Position #{idx+1}", key=f"fast_exit_{tr.get('ID')}", use_container_width=True):
+            
+            # EXIT BUTTON: Profit Sheet me update karega
+            if st.button(f"Exit Position #{idx+1} (Book PnL)", key=f"fast_exit_{tr.get('ID')}", use_container_width=True):
                 idx_l = sheet_trades_df.index[sheet_trades_df["ID"] == tr.get('ID')].tolist()
                 if idx_l:
                     sheet_trades_df.at[idx_l[0], "Status"] = "MANUAL_EXIT"
-                    sheet_trades_df.at[idx_l[0], "Exit Price"] = c_val
+                    sheet_trades_df.at[idx_l[0], "Exit Price"] = round(c_val, 2)
                     sheet_trades_df.at[idx_l[0], "Exit Time"] = ist_now.strftime("%Y-%m-%d %H:%M")
-                    sheet_trades_df.at[idx_l[0], "P n L"] = float(sheet_trades_df.at[idx_l[0], "P n L"] or 0.0) + live_pnl
+                    sheet_trades_df.at[idx_l[0], "P n L"] = round(float(sheet_trades_df.at[idx_l[0], "P n L"] or 0.0) + live_pnl, 2)
                     save_all_trades_permanently(sheet_trades_df)
+                st.toast(f"🎉 Trade Exited! Profit/Loss ₹{live_pnl:+,.2f} synced to Sheet!", icon="💰")
                 st.rerun()
     else:
         st.caption("No running positions right now.")
