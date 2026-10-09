@@ -19,10 +19,8 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# -------------------------------------------------------------
-# ⚠️ APNA GOOGLE APPS SCRIPT WEB APP URL YAHAN PASTE KAREIN:
-# -------------------------------------------------------------
-WEB_APP_URL = "https://script.google.com/macros/s/AKfycbx..."  # <-- Replace with your exact URL
+# Aapka Verified Web App URL:
+WEB_APP_URL = "https://script.google.com/macros/s/AKfycbzUMMXUBRhKvwZchXVfpcUPoX1T1MPt3otPak6b-k-wvsrFEhnttziGyQi__5MqSDcE/exec"
 
 def get_secret(key_name):
     try:
@@ -35,8 +33,24 @@ def get_secret(key_name):
 TELEGRAM_BOT_TOKEN = get_secret("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = get_secret("TELEGRAM_CHAT_ID")
 
+def send_telegram_alert(message_text):
+    """Direct Telegram notification dispatcher"""
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        return False
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+        payload = {
+            "chat_id": TELEGRAM_CHAT_ID,
+            "text": message_text,
+            "parse_mode": "HTML"
+        }
+        res = requests.post(url, json=payload, timeout=6)
+        return res.status_code == 200
+    except Exception:
+        return False
+
 # -------------------------------------------------------------
-# 2. HYBRID STORAGE (ROBUST REDIRECT-FOLLOWING WEBHOOK)
+# 2. HYBRID STORAGE (WEBHOOK + LOCAL DISK)
 # -------------------------------------------------------------
 LOCAL_DB_FILE = "trades_db.json"
 WORKSHEET_NAME = "Portfolio"
@@ -54,29 +68,20 @@ def get_sheets_connection():
         return None
 
 def send_to_google_sheet_webhook(payload_dict):
-    """Sends payload following Google 302 redirects properly"""
-    if not WEB_APP_URL or "AKfycbx..." in WEB_APP_URL:
-        st.warning("⚠️ Web App URL paste nahi kiya gaya hai line 28 par!")
-        return False
     try:
         res = requests.post(
             WEB_APP_URL,
             json=payload_dict,
-            timeout=12,
+            timeout=15,
             allow_redirects=True
         )
-        if res.status_code == 200:
-            return True
-        else:
-            st.error(f"Google Script Response Code: {res.status_code}")
-            return False
+        return res.status_code == 200
     except Exception as err:
-        st.error(f"Webhook Transfer Error: {str(err)}")
+        st.error(f"Webhook Error: {str(err)}")
         return False
 
 def load_all_saved_trades():
     trades_list = []
-    # 1. Sheet connection se read karein
     try:
         conn = get_sheets_connection()
         if conn:
@@ -90,7 +95,6 @@ def load_all_saved_trades():
     except Exception:
         pass
 
-    # 2. Local disk backup fallback
     if not trades_list and os.path.exists(LOCAL_DB_FILE):
         try:
             with open(LOCAL_DB_FILE, "r") as f:
@@ -109,22 +113,18 @@ def load_all_saved_trades():
 
 def save_all_trades_permanently(df):
     clean_df = df[SHEET_COLS].copy()
-    
-    # 1. Local Disk write (Instant UI preservation)
     try:
         with open(LOCAL_DB_FILE, "w") as f:
             json.dump(clean_df.to_dict(orient="records"), f, indent=2, default=str)
     except Exception:
         pass
 
-    # 2. Webhook Sync
     formatted_rows = clean_df.values.tolist()
     send_to_google_sheet_webhook({
         "action": "UPDATE_FULL",
         "rows": formatted_rows
     })
 
-    # 3. Connection backup
     try:
         conn = get_sheets_connection()
         if conn:
@@ -209,7 +209,7 @@ def fetch_chart_dataframe(ticker, tf_str):
     return pd.DataFrame()
 
 # -------------------------------------------------------------
-# 5. HEADER & TIME ROUTING
+# 5. UI HEADER & BALANCE
 # -------------------------------------------------------------
 st.title("⚡ SAHI Pro Trading Terminal")
 
@@ -234,7 +234,16 @@ else:
 
 default_mkt_index = all_market_keys.index(auto_market_key)
 
-st.caption(f"Status: **{active_session_badge}** | Live IST: **{time_str}** | Webhook: **Real-Time P&L Active**")
+with st.sidebar:
+    st.subheader("🔔 Telegram Alerts")
+    if st.button("Test Telegram Connection"):
+        t_ok = send_telegram_alert(f"🚀 <b>SAHI Terminal Connected</b>\nTime: {time_str}\nStatus: System Online!")
+        if t_ok:
+            st.success("Test alert delivered!")
+        else:
+            st.error("Telegram error! Secrets check karein.")
+
+st.caption(f"Status: **{active_session_badge}** | Live IST: **{time_str}** | Sheet Status: **🟢 Synced via Webhook**")
 
 col_mkt, col_tf, col_mode = st.columns([1.8, 1.2, 1.2])
 with col_mkt:
@@ -297,6 +306,7 @@ for trade in all_trades:
                     sheet_trades_df.at[row_idx, "Invested Capital"] = rem_qty * e_price * curr_mult
                     sheet_trades_df.at[row_idx, "SL"] = e_price
                     sheet_modified = True
+                    send_telegram_alert(f"🎯 <b>TP1 HIT - Partial Profit Booked!</b>\nAsset: {a_name}\nBooked PnL: ₹{partial_pnl:+,.2f}\nTrailing SL moved to Entry: {e_price}")
                     continue
                 elif status_curr == "PARTIAL_BOOKED" and (c_high >= t2_price or c_ltp >= t2_price):
                     rem_qty = int(sheet_trades_df.at[row_idx, "Qty"])
@@ -306,6 +316,7 @@ for trade in all_trades:
                     sheet_trades_df.at[row_idx, "Exit Time"] = ist_now.strftime("%Y-%m-%d %H:%M")
                     sheet_trades_df.at[row_idx, "P n L"] = float(sheet_trades_df.at[row_idx, "P n L"] or 0.0) + round(t2_pnl, 2)
                     sheet_modified = True
+                    send_telegram_alert(f"🚀 <b>TARGET 2 HIT!</b>\nAsset: {a_name}\nFinal PnL: ₹{t2_pnl:+,.2f}")
                 elif c_low <= s_price or c_ltp <= s_price:
                     rem_qty = int(sheet_trades_df.at[row_idx, "Qty"])
                     sl_pnl = (s_price - e_price) * rem_qty * curr_mult
@@ -314,6 +325,7 @@ for trade in all_trades:
                     sheet_trades_df.at[row_idx, "Exit Time"] = ist_now.strftime("%Y-%m-%d %H:%M")
                     sheet_trades_df.at[row_idx, "P n L"] = float(sheet_trades_df.at[row_idx, "P n L"] or 0.0) + round(sl_pnl, 2)
                     sheet_modified = True
+                    send_telegram_alert(f"🛑 <b>STOP LOSS HIT</b>\nAsset: {a_name}\nExit Price: {s_price}\nPnL: ₹{sl_pnl:+,.2f}")
             else:
                 if status_curr == "OPEN" and (c_low <= t1_price or c_ltp <= t1_price):
                     booked_qty = max(1, q_total // 2)
@@ -325,6 +337,7 @@ for trade in all_trades:
                     sheet_trades_df.at[row_idx, "Invested Capital"] = rem_qty * e_price * curr_mult
                     sheet_trades_df.at[row_idx, "SL"] = e_price
                     sheet_modified = True
+                    send_telegram_alert(f"🎯 <b>TP1 HIT (SELL) - Partial Profit Booked!</b>\nAsset: {a_name}\nBooked PnL: ₹{partial_pnl:+,.2f}\nTrailing SL moved to Entry: {e_price}")
                     continue
                 elif status_curr == "PARTIAL_BOOKED" and (c_low <= t2_price or c_ltp <= t2_price):
                     rem_qty = int(sheet_trades_df.at[row_idx, "Qty"])
@@ -334,6 +347,7 @@ for trade in all_trades:
                     sheet_trades_df.at[row_idx, "Exit Time"] = ist_now.strftime("%Y-%m-%d %H:%M")
                     sheet_trades_df.at[row_idx, "P n L"] = float(sheet_trades_df.at[row_idx, "P n L"] or 0.0) + round(t2_pnl, 2)
                     sheet_modified = True
+                    send_telegram_alert(f"🚀 <b>TARGET 2 HIT (SELL)!</b>\nAsset: {a_name}\nFinal PnL: ₹{t2_pnl:+,.2f}")
                 elif c_high >= s_price or c_ltp >= s_price:
                     rem_qty = int(sheet_trades_df.at[row_idx, "Qty"])
                     sl_pnl = (e_price - s_price) * rem_qty * curr_mult
@@ -342,13 +356,14 @@ for trade in all_trades:
                     sheet_trades_df.at[row_idx, "Exit Time"] = ist_now.strftime("%Y-%m-%d %H:%M")
                     sheet_trades_df.at[row_idx, "P n L"] = float(sheet_trades_df.at[row_idx, "P n L"] or 0.0) + round(sl_pnl, 2)
                     sheet_modified = True
+                    send_telegram_alert(f"🛑 <b>STOP LOSS HIT (SELL)</b>\nAsset: {a_name}\nExit Price: {s_price}\nPnL: ₹{sl_pnl:+,.2f}")
 
 if sheet_modified:
     save_all_trades_permanently(sheet_trades_df)
     st.rerun()
 
 # -------------------------------------------------------------
-# 7. SINGLE-SCREEN TRADING DESK
+# 7. TRADING DESK & EXECUTION
 # -------------------------------------------------------------
 st.markdown("### 🖥️ Single-Screen Trading Desk")
 desk_left, desk_right = st.columns([2.3, 1.2])
@@ -391,10 +406,7 @@ with desk_left:
             close=plot_df['Close'],
             name="Price",
             increasing_line_color='#089981',
-            decreasing_line_color='#f23645',
-            increasing_fillcolor='#089981',
-            decreasing_fillcolor='#f23645',
-            line=dict(width=1.5)
+            decreasing_line_color='#f23645'
         ))
 
         fig.add_trace(go.Scatter(
@@ -426,7 +438,7 @@ with desk_left:
         )
         st.plotly_chart(fig, use_container_width=True)
     else:
-        st.warning(f"Connecting market feed for {active_chart_asset}... Please wait.")
+        st.warning(f"Connecting market feed for {active_chart_asset}...")
 
 with desk_right:
     st.markdown("#### ⚡ 1-Click Fast Paper Trade")
@@ -505,11 +517,10 @@ with desk_right:
                     "Exit Time": "",
                     "P n L": 0.0
                 }
-                ok = send_to_google_sheet_webhook(trade_row)
+                send_to_google_sheet_webhook(trade_row)
                 new_df = pd.concat([sheet_trades_df, pd.DataFrame([trade_row])], ignore_index=True)
                 save_all_trades_permanently(new_df)
-                if ok:
-                    st.toast("✅ BUY Order Synced to Google Sheet!", icon="🚀")
+                send_telegram_alert(f"🟢 <b>BUY ORDER EXECUTED</b>\nAsset: <b>{active_chart_asset}</b>\nEntry: {asset_ltp}\nQty: {fast_qty}\nSL: {exec_sl} | TP1: {exec_tp}\nInvested: ₹{req_fund:,.2f}")
                 st.rerun()
 
     with col_btn2:
@@ -540,11 +551,10 @@ with desk_right:
                     "Exit Time": "",
                     "P n L": 0.0
                 }
-                ok = send_to_google_sheet_webhook(trade_row)
+                send_to_google_sheet_webhook(trade_row)
                 new_df = pd.concat([sheet_trades_df, pd.DataFrame([trade_row])], ignore_index=True)
                 save_all_trades_permanently(new_df)
-                if ok:
-                    st.toast("✅ SELL Order Synced to Google Sheet!", icon="🚀")
+                send_telegram_alert(f"🔴 <b>SELL ORDER EXECUTED</b>\nAsset: <b>{active_chart_asset}</b>\nEntry: {asset_ltp}\nQty: {fast_qty}\nSL: {auto_sl_sell} | TP1: {auto_tp_sell}\nInvested: ₹{req_fund:,.2f}")
                 st.rerun()
 
     st.markdown("---")
@@ -580,17 +590,17 @@ with desk_right:
                     sheet_trades_df.at[idx_l[0], "Exit Time"] = ist_now.strftime("%Y-%m-%d %H:%M")
                     sheet_trades_df.at[idx_l[0], "P n L"] = round(float(sheet_trades_df.at[idx_l[0], "P n L"] or 0.0) + live_pnl, 2)
                     save_all_trades_permanently(sheet_trades_df)
-                st.toast(f"🎉 Trade Exited! Profit/Loss ₹{live_pnl:+,.2f} synced to Sheet!", icon="💰")
+                    send_telegram_alert(f"💰 <b>TRADE EXITED (Manual)</b>\nAsset: {tr.get('Asset')}\nExit Price: {c_val:.2f}\nPnL: ₹{live_pnl:+,.2f}")
+                st.toast(f"🎉 Trade Exited! Profit/Loss ₹{live_pnl:+,.2f} saved!", icon="💰")
                 st.rerun()
     else:
         st.caption("No running positions right now.")
 
-st.markdown("---")
-
 # -------------------------------------------------------------
 # 8. MULTI-TIMEFRAME CONFIRMATION SCREENER
 # -------------------------------------------------------------
-st.markdown(f"### 📋 {selected_universe} - Multi-Timeframe Synced Scanner (15m + 1h)")
+st.markdown("---")
+st.markdown(f"### 📋 {selected_universe} - Multi-Timeframe Scanner (15m + 1h)")
 
 @st.cache_data(ttl=90)
 def scan_mtf_assets(asset_list):
